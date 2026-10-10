@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / 'original'))
 from bfep_sync import providers as registry  # noqa: E402
 from bfep_sync.providers import Blocked, Figures, ParseError  # noqa: E402
 from bfep_sync.providers.gofundme import GoFundMe, parse_gofundme  # noqa: E402
+from bfep_sync.providers.gogetfunding import GoGetFunding, parse_gogetfunding  # noqa: E402
 from bfep_sync.providers.justgiving import JustGiving, parse_justgiving  # noqa: E402
 from bfep_sync.runner import Row, check, run, shown_status  # noqa: E402
 
@@ -264,6 +265,63 @@ class JustGivingTest(unittest.TestCase):
 
     def test_not_configured(self):
         self.assertFalse(JustGiving(app_id='').configured())
+
+
+
+def ggf_page(sidebar: str) -> str:
+    return f'<html><body><div>{sidebar}</div></body></html>'
+
+
+class GoGetFundingTest(unittest.TestCase):
+
+    def test_reads_figures(self):
+        fig = parse_gogetfunding(fixture('gogetfunding_ok.html'))
+        self.assertEqual(fig, Figures(Decimal('7352.00'), Decimal('50000.00'), 'USD', 277))
+
+    def test_ignores_scripts_and_styles(self):
+        # The fixture's <script> and <style> carry decoy figures.
+        self.assertEqual(parse_gogetfunding(fixture('gogetfunding_ok.html')).raised, Decimal('7352.00'))
+
+    def test_currencies_and_no_goal(self):
+        self.assertEqual(parse_gogetfunding(ggf_page('£120.50 raised of £500 goal')),
+                         Figures(Decimal('120.50'), Decimal('500'), 'GBP', None))
+        self.assertEqual(parse_gogetfunding(ggf_page('NZ$1,000 raised')),
+                         Figures(Decimal('1000'), None, 'NZD', None))
+        self.assertIsNone(parse_gogetfunding(ggf_page('$80 raised of $100 goal')).currency)
+
+    def test_donor_count_from_tab_bar(self):
+        page = ggf_page('US$5 raised of $10 goal <a>Updates 3 Donors 1,204 Followers 9</a>')
+        self.assertEqual(parse_gogetfunding(page).donations, 1204)
+
+    def test_rejects_bad_pages(self):
+        for page in ('<html>Campaign not found</html>',
+                     ggf_page('US$5 raised of $10 goal ... US$6 raised of $10 goal'),
+                     ggf_page('£5 raised of $10 goal'),
+                     ggf_page('¥500 raised')):
+            with self.subTest(page=page), self.assertRaises(ParseError):
+                parse_gogetfunding(page)
+
+    def test_normalize(self):
+        p = GoGetFunding()
+        self.assertEqual(p.normalize('www.gogetfunding.com/help-example-rebuild/'),
+                         'https://gogetfunding.com/help-example-rebuild/')
+        self.assertIsNone(p.normalize('https://gogetfunding.com/'))
+        self.assertIsNone(p.normalize('https://gogetfunding.com.evil.org/x'))
+        self.assertIsNone(p.normalize('GoGetFunding campaign removed'))
+
+    def test_bare_dollar_keeps_stored_dollar_currency(self):
+        p, page = GoGetFunding(), ggf_page('$80 raised of $100 goal')
+        r = row(url='https://gogetfunding.com/x/', currency_code='AUD', goal=Decimal('100'), raised=Decimal('70'))
+        o = check(p, r, FakeFetch(page))
+        self.assertEqual((o.status, o.figures.currency), ('ok', 'AUD'))
+        for code in ('GBP', '', None):
+            with self.subTest(code=code):
+                self.assertEqual(check(p, row(url=r.url, currency_code=code, raised=None), FakeFetch(page)).status,
+                                 'currency_unknown')
+
+    def test_registered_but_not_default(self):
+        self.assertEqual([p.name for p in registry.enabled('gogetfunding')], ['gogetfunding'])
+        self.assertNotIn('gogetfunding', registry.DEFAULT)
 
 
 if __name__ == '__main__':

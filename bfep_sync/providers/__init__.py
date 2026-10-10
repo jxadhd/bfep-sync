@@ -9,10 +9,12 @@ import os
 
 from .base import Blocked, Fetcher, Figures, NotConfigured, ParseError, Provider
 from .gofundme import GoFundMe
+from .gogetfunding import GoGetFunding
 from .justgiving import JustGiving
 
 PROVIDERS: dict[str, type[Provider]] = {
     'gofundme': GoFundMe,
+    'gogetfunding': GoGetFunding,
     'justgiving': JustGiving,
 }
 
@@ -35,4 +37,4 @@ def enabled(names: str | None = None) -> list[Provider]:
 
 
 __all__ = ['Blocked', 'Fetcher', 'Figures', 'NotConfigured', 'ParseError', 'Provider',
-           'PROVIDERS', 'DEFAULT', 'enabled', 'GoFundMe', 'JustGiving']
+           'PROVIDERS', 'DEFAULT', 'enabled', 'GoFundMe', 'GoGetFunding', 'JustGiving']

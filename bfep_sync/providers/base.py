@@ -36,13 +36,14 @@ class NotConfigured(Exception):
 class Figures:
     raised: Decimal
     goal: Decimal | None
-    currency: str
+    currency: str | None   # None: the page showed only a bare "$" (see runner.check())
     donations: int | None = None
 
 
-def validate_figures(raised: Decimal, goal: Decimal | None, currency: str) -> None:
+def validate_figures(raised: Decimal, goal: Decimal | None, currency: str | None) -> None:
     """Rejects values no real fundraiser would report."""
-    if raised < 0 or (goal is not None and goal < 0) or not re.fullmatch(r'[A-Z]{3}', currency):
+    bad_code = currency is not None and not re.fullmatch(r'[A-Z]{3}', currency)
+    if raised < 0 or (goal is not None and goal < 0) or bad_code:
         raise ParseError('implausible values')
 
 
