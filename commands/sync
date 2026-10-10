@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sync: run, check, deploy or roll back the fundraiser figure sync.
+# sync: run, check, deploy or roll back the fundraiser figure sync
 #
 # Usage:  bfep sync [--apply] [--limit N] [...]  run the sync now (a dry run unless --apply)
 #         bfep sync status                       deployed version, timer, last run
