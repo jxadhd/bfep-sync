@@ -1,0 +1,40 @@
+# Runs the fixture tests, then the database tests
+# against a throwaway PostgreSQL service container. It never connects to a
+# real database or a fundraising platform.
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      BFEP_SYNC_TEST_DSN: host=localhost port=5432 user=postgres password=postgres dbname=postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Compile
+        run: python -m compileall -q bfep_sync tests
+      - name: Tests (fixtures and PostgreSQL)
+        run: python -m unittest discover -s tests -v
+      - name: Shell scripts
+        run: shellcheck deploy/*.sh

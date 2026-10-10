@@ -1,0 +1,12 @@
+# Runs the sync twice a day with a random delay, so requests do not land on
+# the platforms at the same minute every day.
+[Unit]
+Description=Run the BFEP fundraiser sync
+
+[Timer]
+OnCalendar=*-*-* 03,15:00:00
+RandomizedDelaySec=45min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,75 @@
+"""PostgreSQL access. The only module that imports psycopg2.
+
+Connection settings come from the standard PGHOST, PGPORT, PGDATABASE, PGUSER
+and PGPASSWORD environment variables, as before.
+"""
+from __future__ import annotations
+
+from .providers import Figures, Provider
+from .runner import Row
+
+# Different from the website's add-campaign lock (42633701).
+LOCK_ID = 42633702
+
+SELECT = """
+SELECT cf.id, cf.url, cf.currency_code, cf.goal_amount, cf.donated_amount,
+       cf.consecutive_failures
+FROM campaign_fundraisers cf
+JOIN campaigns c ON c.id = cf.campaign_id
+WHERE cf.is_active AND cf.auto_sync AND c.deleted_at IS NULL
+  AND cf.url ~* %s
+ORDER BY cf.last_checked_at NULLS FIRST, cf.id
+"""
+
+
+class AlreadyRunning(Exception):
+    pass
+
+
+class PostgresStore:
+    def __init__(self, conn):
+        self.conn = conn
+        self.cur = conn.cursor()
+
+    @classmethod
+    def connect(cls) -> 'PostgresStore':
+        import psycopg2
+        conn = psycopg2.connect(connect_timeout=10)
+        conn.autocommit = False
+        return cls(conn)
+
+    def lock(self) -> None:
+        """Stops two runs (cron overlap, a manual run) working at once."""
+        self.cur.execute('SELECT pg_try_advisory_lock(%s)', (LOCK_ID,))
+        got = self.cur.fetchone()[0]
+        self.conn.commit()
+        if not got:
+            raise AlreadyRunning('another sync run holds the lock')
+
+    def select(self, providers: list[Provider], limit: int) -> list[Row]:
+        if not providers:
+            return []
+        pattern = '|'.join(f'({p.url_pattern})' for p in providers)
+        sql = SELECT + (' LIMIT %s' if limit else '')
+        self.cur.execute(sql, (pattern, limit) if limit else (pattern,))
+        rows = [Row(*r) for r in self.cur.fetchall()]
+        self.conn.rollback()
+        return rows
+
+    def record_ok(self, rid: int, fig: Figures) -> None:
+        self.cur.execute(
+            """UPDATE campaign_fundraisers
+               SET donated_amount = %s, goal_amount = COALESCE(%s, goal_amount),
+                   currency_code = %s, last_checked_at = now(), last_success_at = now(),
+                   sync_status = 'ok', consecutive_failures = 0
+               WHERE id = %s""",
+            (fig.raised, fig.goal, fig.currency, rid))
+        self.conn.commit()
+
+    def record_problem(self, rid: int, status: str, failures: int) -> None:
+        self.cur.execute(
+            """UPDATE campaign_fundraisers
+               SET last_checked_at = now(), sync_status = %s, consecutive_failures = %s
+               WHERE id = %s""",
+            (status, failures, rid))
+        self.conn.commit()

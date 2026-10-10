@@ -1,0 +1,25 @@
+# systemd unit. Copy to /etc/systemd/system/ (see ROLLOUT.md).
+[Unit]
+Description=BFEP fundraiser figure sync
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=bfep-sync
+Group=bfep-sync
+WorkingDirectory=/opt/bfep-sync
+# PGHOST, PGDATABASE, PGUSER, PGPASSWORD, SYNC_PROVIDERS, BFEP_DRUSH (and
+# JUSTGIVING_APP_ID if enabled) live in this root-only file.
+EnvironmentFile=/etc/bfep-sync.env
+ExecStart=/opt/bfep-sync/.venv/bin/python -m bfep_sync --apply --after /opt/bfep-sync/deploy/after-sync.sh
+# Exit 2 (a platform blocked us) and 3 (previous run still going) are not failures.
+SuccessExitStatus=2 3
+# A run takes about 7 seconds per campaign. Stop a hung run well before the next one.
+TimeoutStartSec=4h
+# Hardening. If after-sync.sh needs to reach Docker, the bfep-sync user must
+# be in the docker group; these settings still allow that.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
