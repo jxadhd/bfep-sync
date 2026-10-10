@@ -21,6 +21,8 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 TOOLS = ('bash', 'git', 'rsync', 'flock')
 INNER = 'BFEP_CLI_TEST_INNER'   # set while a deploy runs the suite, to stop recursion
+SCRIPT_SETTINGS = {'DRY_RUN', 'LIVE', 'PREV', 'REPO', 'ENV_FILE', 'RUN_LOCK', 'DEPLOY_LOCK',
+                   'UNIT', 'BIN', 'KEEP_DIR', 'BFEP_LEGACY_DIR', 'BFEP_SYNC_TEST_DSN'}
 
 
 @unittest.skipIf(os.environ.get(INNER), 'running inside a deploy under test')
@@ -58,13 +60,16 @@ class BfepCommandTest(unittest.TestCase):
         (self.bin / 'bfep-foo').write_text('#!/bin/sh\n# bfep-foo: an old standalone script\necho "foo ran with $*"\n')
         (self.bin / 'bfep-foo').chmod(0o755)
 
+        # Settings the scripts read, which may be set in the calling shell (a
+        # deploy runs this suite, possibly as DRY_RUN=1 bfep sync deploy).
+        outer = {k: v for k, v in os.environ.items() if k not in SCRIPT_SETTINGS}
         self.env = {
-            **os.environ, INNER: '1', 'LIVE': str(self.live), 'REPO': str(self.repo),
+            **outer, INNER: '1', 'LIVE': str(self.live), 'REPO': str(self.repo),
+            'PREV': str(self.live.with_name('live.prev')),
             'ENV_FILE': str(t / 'env'), 'RUN_LOCK': str(t / 'run.lock'),
             'DEPLOY_LOCK': str(t / 'deploy.lock'), 'BFEP_LEGACY_DIR': str(self.bin),
             'GIT_CONFIG_GLOBAL': str(t / 'gitconfig'),
         }
-        self.env.pop('BFEP_SYNC_TEST_DSN', None)
         (t / 'gitconfig').write_text('[user]\n\tname = test\n\temail = test@example.org\n')
 
     # helpers
