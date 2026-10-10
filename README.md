@@ -20,7 +20,6 @@ as plug-ins. It runs on butterfly from `/opt/bfep-sync`; see `ROLLOUT.md`.
 ## Run the tests
 
 ```sh
-cd sync-service
 python3 -m unittest discover -s tests -v
 ```
 
@@ -62,6 +61,48 @@ New options and settings:
 Exit codes: `0` means ok. `2` means a platform blocked us with 403 or 429; the
 original also used 2 for this. `3` means another `--apply` run holds the lock.
 `4` means a configuration error. `5` means the database could not be reached.
+
+## The `bfep` command on the server
+
+`bin/bfep` gathers the server's BFEP commands under one name. Each command is
+a script in `commands/`:
+
+| Command | What it does |
+|---|---|
+| `bfep deploy [branch]` | Deploys the website's custom modules and themes (the former `bfep-deploy`). |
+| `bfep update` | Updates Drupal core and contrib by rebuilding the image, with backup and rollback (the former `bfep-update`). |
+| `bfep sync [--apply] [--limit N]` | Runs the sync now with the settings in `/etc/bfep-sync.env`. A dry run unless `--apply`. |
+| `bfep sync status` | The deployed version, the timer and the last run. |
+| `bfep sync log [N]` | The last N lines of the sync's log. |
+| `bfep sync test` | Runs the test suite on the live copy. |
+| `bfep sync deploy [ref]` | Deploys a branch or tag of this repo to `/opt/bfep-sync`, tests first. `DRY_RUN=1` shows what would change. |
+| `bfep sync rollback` | Swaps back to the copy from before the last deploy. Run it again to undo. |
+| `bfep help [command]` | Lists the commands, or shows one command's options. |
+
+`bfep sync deploy` works like `bfep deploy`. It fetches this repo into
+`/opt/bfep-sync-src`, runs the tests, copies the files over `/opt/bfep-sync`
+(keeping the previous copy in `/opt/bfep-sync.prev` and leaving any `*-wip`
+folders alone) and records the version in `/opt/bfep-sync/.deployed`. It
+refuses to run while a sync run holds `/run/bfep-sync.lock`, so code is never
+swapped mid-run. The systemd timer keeps running `/opt/bfep-sync/sync.py`, so
+nothing else changes.
+
+A command this repo doesn't have yet still works: `bfep foo` runs an existing
+`/usr/local/bin/bfep-foo`. To add a command, put an executable script in
+`commands/` whose second line is `# name: one-line description`.
+
+### Installing it (once)
+
+```sh
+git clone https://github.com/jxadhd/bfep-sync /opt/bfep-sync-src
+/opt/bfep-sync-src/install.sh
+```
+
+`install.sh` runs `bfep sync deploy` from the checkout and links
+`/usr/local/bin/bfep` to `/opt/bfep-sync/bin/bfep`, so every later deploy also
+updates the command. `bfep-deploy` and `bfep-update` become one-line wrappers
+for `bfep deploy` and `bfep update`, and the originals are copied to
+`/usr/local/lib/bfep/replaced/`. It is safe to run again.
 
 ## How it is built
 
@@ -136,14 +177,16 @@ parser can be written from it.
 - The advisory lock (id 42633702) stops two `--apply` runs overlapping. Dry
   runs don't take it. The website's add-campaign lock uses a different id
   (42633701).
-- To update the server, unpack the new version beside the live one, run
-  `deploy/compare-dry-run.sh` against the live folder, then swap the folders,
-  as in `ROLLOUT.md`.
+- To update the server, run `bfep sync deploy`. For a change that could
+  alter what the sync writes, first run `DRY_RUN=1 bfep sync deploy`, then
+  compare the old and new dry runs with `deploy/compare-dry-run.sh`
+  (from `/opt/bfep-sync-src`, against `/opt/bfep-sync`).
 
 ## What was tested here
 
-- 36 tests pass on Python 3.13 with PostgreSQL 16: 27 fixture tests and 9
-  database tests, over a Unix socket and over TCP with password login.
+- 49 tests pass on Python 3.13 with PostgreSQL 16: 27 fixture tests, 9
+  database tests (over a Unix socket and over TCP with password login) and 13
+  tests of the `bfep` command and `install.sh` against fake server folders.
 - The database tests ran as a `bfep_sync` role restricted by `grants.sql`,
   with tables owned by `data`, as on production. The role could not read
   other columns, insert, or update the URL.

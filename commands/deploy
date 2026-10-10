@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# deploy: pull the BFEP website repo and sync custom modules into the Drupal container.
+#
+# Usage:  bfep deploy [branch]        deploy a branch (default: main)
+#         DRY_RUN=1 bfep deploy       show what would change, touch nothing
+#         NO_UPDB=1 bfep deploy       skip "drush updb" (still clears caches)
+#
+# This is the former /usr/local/bin/bfep-deploy, unchanged apart from
+# comments. "bfep-deploy" still works after install.sh.
+set -euo pipefail
+
+BRANCH="${1:-main}"
+REPO="${REPO:-/opt/docker/drupal/repo}"
+MODULES_DEST="${MODULES_DEST:-/opt/docker/drupal/modules/custom}"
+THEMES_DEST="${THEMES_DEST:-/opt/docker/drupal/themes/custom}"
+CONTAINER="${CONTAINER:-drupal}"
+DRY_RUN="${DRY_RUN:-0}"
+NO_UPDB="${NO_UPDB:-0}"
+
+# shellcheck disable=SC2054  # the commas are rsync's --chmod syntax
+RSYNC_OPTS=(-rltD --delete --human-readable --itemize-changes
+  --chmod=D755,F644
+  --exclude='.DS_Store' --exclude='.git*' --exclude='.idea')
+[[ "$DRY_RUN" == "1" ]] && RSYNC_OPTS+=(--dry-run)
+
+say() { printf '\n==> %s\n' "$*"; }
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+# Only one deploy at a time.
+exec 9>/var/lock/bfep-deploy.lock
+flock -n 9 || die "another bfep-deploy is already running"
+
+[[ -d "$REPO/.git" ]] || die "no git checkout at $REPO"
+[[ -d "$MODULES_DEST" ]] || die "modules destination $MODULES_DEST does not exist"
+docker inspect "$CONTAINER" >/dev/null 2>&1 || die "container '$CONTAINER' not found"
+
+cd "$REPO"
+git diff --quiet && git diff --cached --quiet \
+  || die "uncommitted changes in $REPO; refusing to deploy over them"
+
+say "Fetching origin/$BRANCH"
+before="$(git rev-parse --short HEAD)"
+git fetch --prune origin "$BRANCH"
+git checkout -q "$BRANCH" 2>/dev/null || git checkout -q -b "$BRANCH" "origin/$BRANCH"
+git merge --ff-only "origin/$BRANCH"
+after="$(git rev-parse --short HEAD)"
+if [[ "$before" == "$after" ]]; then
+  echo "Already at $after ($(git log -1 --format=%s))"
+else
+  git log --oneline "$before..$after"
+fi
+
+say "Syncing modules -> $MODULES_DEST"
+# Sync each module separately so modules that are not in the repo are never deleted.
+for src in "$REPO"/drupal/modules/custom/*/; do
+  name="$(basename "$src")"
+  mkdir -p "$MODULES_DEST/$name"
+  echo "-- $name"
+  rsync "${RSYNC_OPTS[@]}" "$src" "$MODULES_DEST/$name/"
+done
+
+if [[ -d "$REPO/drupal/themes/custom" ]]; then
+  if [[ -d "$THEMES_DEST" ]]; then
+    say "Syncing themes -> $THEMES_DEST"
+    for src in "$REPO"/drupal/themes/custom/*/; do
+      name="$(basename "$src")"
+      mkdir -p "$THEMES_DEST/$name"
+      echo "-- $name"
+      rsync "${RSYNC_OPTS[@]}" "$src" "$THEMES_DEST/$name/"
+    done
+  else
+    echo
+    echo "NOTE: $THEMES_DEST does not exist, so themes were NOT synced."
+    echo "      Set THEMES_DEST to the host folder mounted at /opt/drupal/web/themes/custom."
+  fi
+fi
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  say "Dry run complete; nothing changed and Drupal was not touched"
+  exit 0
+fi
+
+DRUSH="$(docker exec "$CONTAINER" sh -c 'ls /opt/drupal/vendor/bin/drush 2>/dev/null || command -v drush' || true)"
+if [[ -z "$DRUSH" ]]; then
+  echo
+  echo "WARNING: drush not found in '$CONTAINER'; files are synced but caches were NOT cleared."
+  echo "         Clear caches at /admin/config/development/performance."
+  exit 0
+fi
+
+drush() { docker exec -u www-data -w /opt/drupal "$CONTAINER" "$DRUSH" "$@"; }
+
+if [[ "$NO_UPDB" != "1" ]]; then
+  say "Running database updates"
+  drush updb -y
+fi
+say "Clearing caches"
+drush cr
+
+say "Deployed $after: $(git log -1 --format=%s)"

@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# update: back up, then update Drupal core + contrib modules by rebuilding
+# the container image, run database updates, and verify.
+#
+# Usage:  bfep update                       full update
+#         CHECK=1 bfep update               report only; changes nothing
+#         bfep update rollback <timestamp>  restore previous image + database
+#
+# Custom modules/themes are bind-mounted and are not touched (use bfep deploy).
+# This is the former /usr/local/bin/bfep-update, unchanged apart from
+# comments. "bfep-update" still works after install.sh.
+set -euo pipefail
+umask 077
+
+APP_DIR="${APP_DIR:-/opt/docker/drupal}"
+SERVICE="${SERVICE:-drupal}"
+CONTAINER="${CONTAINER:-drupal}"
+BACKUP_ROOT="${BACKUP_ROOT:-/opt/backups/drupal}"
+SITE_URL="${SITE_URL:-https://butterfly.joshcross.co.nz/}"
+CHECK="${CHECK:-0}"
+FILES_BACKUP="${FILES_BACKUP:-0}"   # 1 = also tar sites/default/files
+KEEP="${KEEP:-5}"
+
+say() { printf '\n==> %s\n' "$*"; }
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+DC="docker compose"
+cd "$APP_DIR" || die "cannot cd to $APP_DIR"
+$DC config -q || die "docker compose config is invalid in $APP_DIR"
+
+drush() { docker exec -u www-data -w /opt/drupal "$CONTAINER" vendor/bin/drush "$@"; }
+comp()  { docker exec -u www-data -e COMPOSER_HOME=/tmp/composer -w /opt/drupal "$CONTAINER" composer "$@"; }
+
+wait_ready() {
+  for _ in $(seq 1 60); do
+    if [[ "$(drush status --field=bootstrap 2>/dev/null || true)" == "Successful" ]]; then return 0; fi
+    sleep 2
+  done
+  die "Drupal did not become ready within 2 minutes"
+}
+
+rollback() {
+  local ts="${1:?usage: bfep-update rollback <timestamp>}" b
+  b="$BACKUP_ROOT/$ts"
+  [[ -f "$b/image-name" ]] || die "no complete backup at $b"
+  read -r -p "Restore the previous image from $ts (database only if an automatic dump exists)? [y/N] " a
+  [[ "$a" == "y" ]] || die "aborted"
+  docker tag "bfep-drupal-rollback:$ts" "$(cat "$b/image-name")"
+  $DC up -d --no-build --force-recreate "$SERVICE"
+  wait_ready
+  if [[ -f "$b/db.sql.gz" ]] && docker exec "$CONTAINER" which psql >/dev/null 2>&1; then
+    drush sql:drop -y
+    gunzip -c "$b/db.sql.gz" | docker exec -i -u www-data -w /opt/drupal "$CONTAINER" vendor/bin/drush sql:cli
+  else
+    # shellcheck disable=SC2010  # backup folder names are timestamps we created
+    echo "Database NOT restored automatically. Dump(s) in $b: $(ls "$b" | grep '^db' | tr '\n' ' ')"
+    echo "Restore it on the database server only if you need to (a patch update usually does not require it)."
+  fi
+  drush cr
+  drush state:set system.maintenance_mode 0 --input-format=integer
+  say "Rolled back to $ts"
+  exit 0
+}
+
+[[ "${1:-}" == "rollback" ]] && rollback "${2:-}"
+
+docker inspect "$CONTAINER" >/dev/null 2>&1 || die "container '$CONTAINER' not found"
+mkdir -p "$BACKUP_ROOT"
+
+say "Preflight"
+df -Pm "$BACKUP_ROOT" /var/lib/docker 2>/dev/null | awk 'NR>1 && $4 < 3000 {print "WARNING: only " $4 " MB free on " $6}'
+echo "Current core: $(drush status --field=drupal-version 2>/dev/null || echo unknown)"
+echo "--- outdated direct packages ---"
+comp outdated --direct --no-ansi 2>&1 || true
+echo "--- security advisories ---"
+comp audit --no-ansi 2>&1 || true
+
+if awk -v s="  $SERVICE:" '$0==s{f=1;next} /^  [A-Za-z0-9_-]+:/{f=0} f&&/^    build:/{found=1} END{exit !found}' <($DC config); then
+  MODE=build
+else
+  MODE=pull
+fi
+echo "Update method: $MODE (service '$SERVICE')"
+[[ "$CHECK" == "1" ]] && { say "Check only; nothing changed"; exit 0; }
+
+TS="$(date +%Y%m%d-%H%M%S)"
+B="$BACKUP_ROOT/$TS"
+mkdir -p "$B"
+
+say "Backing up to $B"
+if [[ -n "${DB_DUMP:-}" ]]; then
+  # A dump you made yourself (e.g. pg_dump on the database server).
+  [[ -s "$DB_DUMP" ]] || die "DB_DUMP '$DB_DUMP' is missing or empty"
+  [[ -n "$(find "$DB_DUMP" -mmin -120)" ]] || die "DB_DUMP is over 2 hours old; make a fresh dump"
+  cp "$DB_DUMP" "$B/db-manual.dump"
+else
+  if ! drush sql:dump --gzip --result-file=/tmp/bfep-db.sql >/dev/null; then
+    die "automatic database dump failed (no database client in the container?). Make a dump yourself and run: DB_DUMP=/path/to/dump bfep-update"
+  fi
+  docker cp "$CONTAINER:/tmp/bfep-db.sql.gz" "$B/db.sql.gz"
+  docker exec "$CONTAINER" rm -f /tmp/bfep-db.sql.gz
+  [[ -s "$B/db.sql.gz" ]] || die "database backup is empty; refusing to continue"
+fi
+docker cp "$CONTAINER:/opt/drupal/web/sites/default/settings.php" "$B/settings.php" 2>/dev/null || true
+if [[ "$FILES_BACKUP" == "1" ]]; then
+  docker exec "$CONTAINER" tar czf - -C /opt/drupal/web/sites/default files > "$B/files.tgz"
+fi
+comp show --direct --no-ansi > "$B/packages-before.txt" 2>/dev/null || true
+docker inspect -f '{{.Config.Image}}' "$CONTAINER" > "$B/image-name"
+docker tag "$(docker inspect -f '{{.Image}}' "$CONTAINER")" "bfep-drupal-rollback:$TS"
+echo "Backup ok: $(du -sh "$B" | cut -f1). Roll back with: bfep-update rollback $TS"
+
+trap 'echo; echo "FAILED at line $LINENO. Site may still be in maintenance mode."; echo "Roll back with: bfep-update rollback '"$TS"'" >&2' ERR
+
+say "Maintenance mode on"
+drush state:set system.maintenance_mode 1 --input-format=integer
+drush cr
+
+if [[ "$MODE" == "build" ]]; then
+  say "Rebuilding image (pulling latest base image, no cache)"
+  $DC build --pull --no-cache "$SERVICE"
+else
+  say "Pulling image"
+  $DC pull "$SERVICE"
+fi
+
+say "Recreating container"
+$DC up -d "$SERVICE"
+wait_ready
+
+say "Database updates"
+drush updb -y
+drush cr
+drush state:set system.maintenance_mode 0 --input-format=integer
+
+say "Verifying"
+comp show --direct --no-ansi > "$B/packages-after.txt" 2>/dev/null || true
+diff -u "$B/packages-before.txt" "$B/packages-after.txt" | grep -E '^[+-][^+-]' || echo "(no package version changes)"
+code="$(curl -s -o /dev/null -w '%{http_code}' -L "$SITE_URL" || true)"
+echo "Site returned HTTP $code"
+[[ "$code" == "200" ]] || echo "WARNING: expected 200 from $SITE_URL"
+echo "--- recent errors ---"
+drush watchdog:show --severity=Error --count=5 2>&1 || true
+drush status --fields=drupal-version,php-version 2>&1 || true
+
+# Housekeeping: keep the last $KEEP backups and 3 rollback images.
+ls -1dt "$BACKUP_ROOT"/*/ | tail -n +"$((KEEP + 1))" | xargs -r rm -rf
+docker images --format '{{.Repository}}:{{.Tag}}' bfep-drupal-rollback | sort -r | tail -n +4 | xargs -r docker rmi >/dev/null || true
+docker image prune -f >/dev/null || true
+
+say "Update complete. Backup: $B"

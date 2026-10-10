@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# sync: run, check, deploy or roll back the fundraiser figure sync.
+#
+# Usage:  bfep sync [--apply] [--limit N] [...]  run the sync now (a dry run unless --apply)
+#         bfep sync status                       deployed version, timer, last run
+#         bfep sync log [N]                      the last N lines of its log (default 50)
+#         bfep sync test                         run the test suite on the live copy
+#         bfep sync deploy [ref]                 deploy a branch or tag from GitHub (default: main)
+#         DRY_RUN=1 bfep sync deploy             show what would change, touch nothing
+#         bfep sync rollback                     swap back to the version before the last deploy
+#
+# A deploy fetches the bfep-sync repo into $REPO, runs its tests, copies it
+# over $LIVE (keeping the old copy in $PREV and any *-wip folders), and
+# refuses while a sync run is in progress. The systemd timer keeps running
+# $LIVE/sync.py, so a deploy needs no other change.
+set -euo pipefail
+
+LIVE="${LIVE:-/opt/bfep-sync}"
+PREV="${PREV:-$LIVE.prev}"
+REPO="${REPO:-/opt/bfep-sync-src}"
+ENV_FILE="${ENV_FILE:-/etc/bfep-sync.env}"
+RUN_LOCK="${RUN_LOCK:-/run/bfep-sync.lock}"
+DEPLOY_LOCK="${DEPLOY_LOCK:-/var/lock/bfep-sync-deploy.lock}"
+UNIT="${UNIT:-bfep-sync}"
+PY="${PYTHON:-python3}"
+DRY_RUN="${DRY_RUN:-0}"
+
+RSYNC_OPTS=(-rlptD --delete --human-readable --itemize-changes --chmod=go-w
+  --exclude='.git*' --exclude='__pycache__/' --exclude='*-wip/'
+  --exclude='/.deployed' --exclude='/.venv/')
+
+say() { printf '\n==> %s\n' "$*"; }
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+version() { cat "$1/.deployed" 2>/dev/null || echo "unknown (installed by hand)"; }
+
+load_env() {
+  [[ -r "$ENV_FILE" ]] || die "cannot read $ENV_FILE"
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
+}
+
+# Holds the lock the systemd unit takes, so code is never swapped mid-run.
+hold_run_lock() {
+  exec 8>"$RUN_LOCK"
+  flock -n 8 || die "a sync run is in progress; try again when it finishes (bfep sync status)"
+}
+
+run() {
+  load_env
+  cd "$LIVE"
+  local arg
+  for arg in "$@"; do
+    if [[ "$arg" == "--apply" ]]; then
+      # Same lock as the timer, so a manual run and a timer run never overlap.
+      hold_run_lock
+      break
+    fi
+  done
+  exec "$PY" sync.py "$@"
+}
+
+status() {
+  echo "Deployed:  $(version "$LIVE")"
+  [[ -d "$PREV" ]] && echo "Previous:  $(version "$PREV")  (bfep sync rollback)"
+  echo
+  systemctl list-timers "$UNIT.timer" --all --no-pager | head -2
+  echo
+  systemctl show "$UNIT.service" -p ActiveState -p Result -p ExecMainExitTimestamp -p ExecMainStatus --no-pager
+  echo
+  echo "Last log lines:"
+  journalctl -u "$UNIT" -n 12 --no-pager -o cat
+}
+
+deploy() {
+  local ref="${1:-main}" before after
+  exec 9>"$DEPLOY_LOCK"
+  flock -n 9 || die "another bfep sync deploy is already running"
+
+  [[ -d "$REPO/.git" ]] || die "no git checkout at $REPO (see install.sh)"
+  cd "$REPO"
+  if ! git diff --quiet || ! git diff --cached --quiet; then
+    die "uncommitted changes in $REPO; refusing to deploy over them"
+  fi
+
+  say "Fetching $ref"
+  before="$(git rev-parse --short HEAD)"
+  git fetch --prune --tags origin
+  if git show-ref -q --verify "refs/remotes/origin/$ref"; then
+    git checkout -q "$ref" 2>/dev/null || git checkout -q -b "$ref" "origin/$ref"
+    git merge -q --ff-only "origin/$ref"
+  else
+    git checkout -q --detach "$ref" || die "no branch, tag or commit called '$ref'"
+  fi
+  after="$(git rev-parse --short HEAD)"
+  if [[ "$before" == "$after" ]]; then
+    echo "Already at $after ($(git log -1 --format=%s))"
+  else
+    git log --oneline "$before..$after"
+  fi
+
+  say "Running tests"
+  local out
+  if ! out="$("$PY" -m unittest discover -s tests 2>&1)"; then
+    printf '%s\n' "$out" | tail -30
+    die "tests failed; nothing deployed"
+  fi
+  printf '%s\n' "$out" | tail -1
+
+  say "Changes to $LIVE"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    rsync "${RSYNC_OPTS[@]}" --dry-run "$REPO/" "$LIVE/"
+    say "Dry run complete; $LIVE was not touched"
+    return 0
+  fi
+
+  hold_run_lock
+  if [[ -d "$LIVE" ]]; then
+    rsync -a --delete "$LIVE/" "$PREV/"
+  fi
+  mkdir -p "$LIVE"
+  rsync "${RSYNC_OPTS[@]}" "$REPO/" "$LIVE/"
+  echo "$after $(git log -1 --format='%s') (deployed $(date '+%Y-%m-%d %H:%M'))" >"$LIVE/.deployed"
+
+  say "Checking the deployed copy"
+  if ! (cd "$LIVE" && "$PY" sync.py --help >/dev/null); then
+    swap
+    die "the deployed copy would not start, so the previous version was put back"
+  fi
+  say "Deployed $(version "$LIVE")"
+}
+
+# Exchanges $LIVE and $PREV, so a second rollback undoes the first.
+swap() {
+  local tmp="$LIVE.swap"
+  [[ ! -e "$tmp" ]] || die "$tmp exists from an interrupted rollback; check it, then remove it"
+  mv "$LIVE" "$tmp"
+  mv "$PREV" "$LIVE"
+  mv "$tmp" "$PREV"
+}
+
+rollback() {
+  [[ -d "$PREV" ]] || die "no previous version at $PREV"
+  exec 9>"$DEPLOY_LOCK"
+  flock -n 9 || die "a bfep sync deploy is running"
+  hold_run_lock
+  say "Rolling back from $(version "$LIVE")"
+  swap
+  say "Now running $(version "$LIVE")"
+}
+
+case "${1:-}" in
+  status) status ;;
+  log) journalctl -u "$UNIT" -n "${2:-50}" --no-pager -o cat ;;
+  test) cd "$LIVE" && exec "$PY" -m unittest discover -s tests ;;
+  deploy) shift; deploy "$@" ;;
+  rollback) rollback ;;
+  -h | --help | help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p}' "$0" ;;
+  -* | "") run "$@" ;;
+  *) die "unknown: bfep sync $1 (see bfep help sync)" ;;
+esac

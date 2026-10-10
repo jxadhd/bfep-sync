@@ -114,3 +114,23 @@ template runs them in a PostgreSQL service container. To let tests patch
 them, `run()` and `check()` now look up `time.sleep`, `random.random` and the
 HTTP fetcher when called rather than binding them as default arguments; the
 behaviour is unchanged.
+
+## 14. The `bfep` command (2026-10-10)
+
+**What:** `bin/bfep` with `commands/sync` (run, status, log, test, deploy,
+rollback) and `install.sh`. `bfep sync deploy` deploys this repo the way
+`bfep-deploy` deploys the website. `tests/test_cli.py` covers it against fake
+server folders.
+
+**Drop it:** Delete `bin/`, `commands/sync`, `install.sh` and
+`tests/test_cli.py`, remove `/usr/local/bin/bfep`, and copy the originals back
+from `/usr/local/lib/bfep/replaced/`.
+
+## 15. `bfep deploy` and `bfep update` (2026-10-10)
+
+**What:** The server's `bfep-deploy` and `bfep-update` scripts, now in
+`commands/` so they are under version control. Only their header comments
+changed.
+
+**Drop it:** Delete `commands/deploy` and `commands/update`; `bfep deploy`
+then falls back to the original scripts once they are copied back.
