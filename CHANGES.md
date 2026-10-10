@@ -134,3 +134,17 @@ changed.
 
 **Drop it:** Delete `commands/deploy` and `commands/update`; `bfep deploy`
 then falls back to the original scripts once they are copied back.
+
+## 16. GoGetFunding provider (2026-10-10, off by default)
+
+**What:** `providers/gogetfunding.py` reads raised, goal, currency and donor
+count from a GoGetFunding page's visible text. The parser is Josh's
+`gogetfunding-wip` parser, adapted to the shared `Figures` and `ParseError`.
+It only runs when `gogetfunding` is in `SYNC_PROVIDERS`. When a page shows
+only a bare "$", `runner.check()` keeps the row's stored currency if it is a
+dollar currency (USD, AUD, NZD, CAD, HKD, SGD) and records `currency_unknown`
+otherwise, so a "$" page never relabels a row. The test fixture is built from
+the page's text shapes, not saved from the site, so dry-run it before enabling.
+
+**Drop it:** Delete `providers/gogetfunding.py`, its entry in
+`providers/__init__.py`, the bare-"$" branch in `runner.check()` and its tests.

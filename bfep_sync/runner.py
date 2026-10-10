@@ -11,6 +11,8 @@ The decision rules in check() are the original sync.py rules, unchanged:
 * unparseable page -> 'parse_error' (a failure)
 * other exception -> 'error' (not a failure)
 * no stored currency but a stored raised amount -> 'currency_unknown'
+* page shows only a bare "$" -> the stored currency is kept when it is a
+  dollar currency, otherwise 'currency_unknown' (GoGetFunding only)
 * currency differs and the goal does not match -> 'currency_mismatch'
   (same goal under another label means the stored label is wrong, so the
   platform's currency is adopted)
@@ -26,7 +28,7 @@ import time
 import urllib.error
 import urllib.request
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Callable, Iterable
 
@@ -36,6 +38,8 @@ UA = 'TBEPSync/1.0 (+https://butterfly.joshcross.co.nz)'
 NOT_FOUND_AFTER = 3            # consecutive failures before status 'not_found'
 DROP_LIMIT = Decimal('0.20')   # hold the update if raised falls by more than this
 TRANSIENT_HTTP = {500, 502, 503, 504}
+# Currencies written with a bare "$", so a page showing only "$" can be one of them.
+DOLLAR_CODES = {'USD', 'AUD', 'NZD', 'CAD', 'HKD', 'SGD'}
 
 
 def http_fetch(url: str, headers: dict | None = None) -> str:
@@ -115,6 +119,10 @@ def check(provider: Provider, row: Row, fetch: Fetcher, retries: int = 0,
 
     code = (row.currency_code or '').strip()
     raised, goal = row.raised, row.goal
+    if fig.currency is None:
+        if code not in DOLLAR_CODES:
+            return Outcome('currency_unknown', None, False)
+        fig = replace(fig, currency=code)
     if not code:
         if raised:
             return Outcome('currency_unknown', None, False)
