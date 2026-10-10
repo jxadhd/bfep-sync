@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# bfep: BFEP server commands. Run "bfep help" for the list.
+#
+# Each command is an executable in ../commands, so "bfep sync" runs
+# commands/sync. A command this repo doesn't have yet falls back to an older
+# standalone /usr/local/bin/bfep-<name> script, so nothing has to move at once.
+set -euo pipefail
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+BFEP_ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+COMMANDS="$BFEP_ROOT/commands"
+LEGACY_DIR="${BFEP_LEGACY_DIR:-/usr/local/bin}"
+export BFEP_ROOT
+
+# One line of help per command: the "# name: description" on its second line.
+describe() { sed -n '2s/^# *[a-z-]*: *//p' "$1"; }
+
+legacy() {
+  local f="$LEGACY_DIR/bfep-$1"
+  # A wrapper left by install.sh points back here, so it is not a fallback.
+  [[ -x "$f" && ! -L "$f" ]] && ! grep -q '^exec bfep ' "$f" && echo "$f"
+}
+
+usage() {
+  echo "Usage: bfep <command> [args]"
+  echo
+  echo "Commands:"
+  local f name
+  for f in "$COMMANDS"/*; do
+    [[ -f "$f" && -x "$f" ]] || continue
+    printf '  %-10s %s\n' "$(basename "$f")" "$(describe "$f")"
+  done
+  for f in "$LEGACY_DIR"/bfep-*; do
+    [[ -e "$f" ]] || continue
+    name="${f##*/bfep-}"
+    [[ -e "$COMMANDS/$name" ]] && continue
+    legacy "$name" >/dev/null || continue
+    printf '  %-10s %s\n' "$name" "$(describe "$f") (runs $f)"
+  done
+  echo
+  echo "Run 'bfep help <command>' for a command's options."
+}
+
+# The comment block at the top of a command, without the leading "# ".
+command_help() {
+  [[ "$1" =~ ^[a-z][a-z0-9-]*$ ]] || { echo "bfep: not a command: '$1'" >&2; exit 2; }
+  local f="$COMMANDS/$1"
+  [[ -f "$f" ]] || f="$(legacy "$1")" || { echo "bfep: unknown command '$1'" >&2; exit 2; }
+  sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p}' "$f"
+}
+
+cmd="${1:-help}"
+[[ $# -gt 0 ]] && shift
+case "$cmd" in
+  help | -h | --help)
+    if [[ $# -gt 0 ]]; then command_help "$1"; else usage; fi
+    exit 0
+    ;;
+esac
+[[ "$cmd" =~ ^[a-z][a-z0-9-]*$ ]] || { echo "bfep: not a command: '$cmd'" >&2; exit 2; }
+
+if [[ -f "$COMMANDS/$cmd" && -x "$COMMANDS/$cmd" ]]; then
+  exec "$COMMANDS/$cmd" "$@"
+fi
+if old="$(legacy "$cmd")"; then
+  exec "$old" "$@"
+fi
+echo "bfep: unknown command '$cmd'. Run 'bfep help'." >&2
+exit 2
