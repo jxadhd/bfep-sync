@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# update: back up, then update Drupal core + contrib modules by rebuilding
-# the container image, run database updates, and verify.
+# update: back up, then update Drupal core and contrib modules by rebuilding the container
 #
 # Usage:  bfep update                       full update
 #         CHECK=1 bfep update               report only; changes nothing

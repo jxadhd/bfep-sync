@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# deploy: pull the BFEP website repo and sync custom modules into the Drupal container.
+# deploy: pull the BFEP website repo and sync custom modules into the Drupal container
 #
 # Usage:  bfep deploy [branch]        deploy a branch (default: main)
 #         DRY_RUN=1 bfep deploy       show what would change, touch nothing
