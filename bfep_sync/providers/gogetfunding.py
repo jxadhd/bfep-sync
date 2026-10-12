@@ -6,6 +6,10 @@ the campaign sidebar reads "US$7,352.00 raised of $50,000.00 goal" and the
 headline count reads "277 Donors". The raised figure carries a currency
 prefix ("US$"); the goal usually carries a bare "$".
 
+Campaigns without a goal, and closed ones, show "US$589.00 Donated So Far"
+instead, sometimes followed by "Raised offline: $505.00 Total: $3,411.00".
+The total is used when there is one, since that is the figure the page shows.
+
 When a page shows only a bare "$", the currency is returned as None and the
 runner keeps the row's stored dollar currency (see runner.check()).
 
@@ -34,6 +38,8 @@ TAGS = re.compile(r'<[^>]+>')
 AMOUNT = r'(?<![A-Za-z])((?:[A-Za-z]{1,3})?[$£€¥])\s?(\d[\d,]*(?:\.\d+)?)'
 WITH_GOAL = re.compile(AMOUNT + r'\s*raised of\s*' + AMOUNT + r'\s*goal', re.I)
 NO_GOAL = re.compile(AMOUNT + r'\s*raised\b', re.I)
+DONATED = re.compile(AMOUNT + r'\s*Donated So Far', re.I)
+OFFLINE_TOTAL = re.compile(r'Raised offline:\s*' + AMOUNT + r'\s*Total:\s*' + AMOUNT, re.I)
 # Anchored to the "14% Funded" line. A bare "(\d+) Donors" also matches the tab bar, where the
 # Updates count runs into the Donors label ("Updates 3 Donors 277 Followers 14").
 DONORS = re.compile(r'\d+(?:\.\d+)?%\s*Funded\s*(\d[\d,]*)\s+Donors?\b')
@@ -54,6 +60,15 @@ def _amount(symbol: str, number: str) -> tuple[str, Decimal]:
         raise ParseError(f'bad amount: {e!r}')
 
 
+def _one(found: set) -> tuple[str, Decimal]:
+    """The single raised figure; every copy of it on the page must agree."""
+    if not found:
+        raise ParseError('no raised figure')
+    if len(found) > 1:
+        raise ParseError('conflicting raised figures')
+    return found.pop()
+
+
 def parse_gogetfunding(page: str) -> Figures:
     text = _text(page)
 
@@ -65,13 +80,17 @@ def parse_gogetfunding(page: str) -> Figures:
         (rsym, raised), (gsym, goal) = found.pop()
         if not rsym.endswith(gsym):          # "US$" with a bare "$" is fine; "£" with "$" is not
             raise ParseError('raised and goal use different currency symbols')
+    elif DONATED.search(text):
+        rsym, raised = _one({_amount(m[0], m[1]) for m in DONATED.findall(text)})
+        totals = {_amount(m[2], m[3]) for m in OFFLINE_TOTAL.findall(text)}
+        if totals:
+            tsym, raised = _one(totals)
+            if not rsym.endswith(tsym):
+                raise ParseError('donated and total use different currency symbols')
+        goal = None
     else:
-        found = {_amount(m[0], m[1]) for m in NO_GOAL.findall(text)}
-        if not found:
-            raise ParseError('no raised figure')
-        if len(found) > 1:
-            raise ParseError('conflicting raised figures')
-        (rsym, raised), goal = found.pop(), None
+        rsym, raised = _one({_amount(m[0], m[1]) for m in NO_GOAL.findall(text)})
+        goal = None
 
     currency = SYMBOLS[rsym]
     validate_figures(raised, goal, currency)
