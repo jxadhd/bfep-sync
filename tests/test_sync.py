@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 import io
+import json
 import pathlib
+import re
 import sys
 import unittest
 import urllib.error
@@ -21,6 +23,7 @@ from bfep_sync.providers import Blocked, Figures, ParseError  # noqa: E402
 from bfep_sync.providers.gofundme import GoFundMe, parse_gofundme  # noqa: E402
 from bfep_sync.providers.gogetfunding import GoGetFunding, parse_gogetfunding  # noqa: E402
 from bfep_sync.providers.justgiving import JustGiving, parse_justgiving  # noqa: E402
+from bfep_sync.providers.paypal import PayPal, parse_paypal  # noqa: E402
 from bfep_sync.providers.spotfund import Spotfund, parse_spotfund  # noqa: E402
 from bfep_sync.runner import Row, check, run, shown_status  # noqa: E402
 
@@ -398,6 +401,65 @@ class SpotfundTest(unittest.TestCase):
     def test_registered_but_not_default(self):
         self.assertEqual([p.name for p in registry.enabled('spotfund')], ['spotfund'])
         self.assertNotIn('spotfund', registry.DEFAULT)
+
+
+def pp_page(**fields) -> str:
+    data = {'donationCode': 'USD', 'productId': 'ABCD1234EFGH5', 'campaignTargetAmount': '1000.00',
+            'campaignTotalAmountRaised': '250.00', 'campaignTotalNumberOfTxn': 7}
+    data.update(fields)
+    return '<script>' + json.dumps({k: v for k, v in data.items() if v is not None}) + '</script>'
+
+
+class PayPalTest(unittest.TestCase):
+
+    def test_reads_figures(self):
+        self.assertEqual(parse_paypal(fixture('paypal_ok.html'), 'A4PQB5UYBA7T6'),
+                         Figures(Decimal('10952.56'), Decimal('50000.00'), 'USD', 203))
+
+    def test_no_goal(self):
+        for goal in ('', '0.00', None):
+            with self.subTest(goal=goal):
+                self.assertIsNone(parse_paypal(pp_page(campaignTargetAmount=goal), 'ABCD1234EFGH5').goal)
+
+    def test_rejects_bad_pages(self):
+        for page in ('<html>Things don\'t appear to be working at the moment.</html>',
+                     pp_page(campaignTotalAmountRaised=None),
+                     pp_page(campaignTotalAmountRaised='lots'),
+                     pp_page(productId='OTHER1234567'),
+                     pp_page() + pp_page(campaignTotalAmountRaised='300.00'),
+                     pp_page(donationCode='usd')):
+            with self.subTest(page=page), self.assertRaises(ParseError):
+                parse_paypal(page, 'ABCD1234EFGH5')
+
+    def test_normalize(self):
+        p = PayPal()
+        self.assertEqual(p.normalize('https://www.paypal.com/donate?campaign_id=6VWXM2SYNUE3N&fbclid=PAZ_x-1'),
+                         'https://www.paypal.com/donate/?campaign_id=6VWXM2SYNUE3N')
+        self.assertEqual(p.normalize('paypal.com/donate/?campaign_id=YK6DYPRRGHY8U'),
+                         'https://www.paypal.com/donate/?campaign_id=YK6DYPRRGHY8U')
+        for bad in ('https://www.paypal.com/paypalme/Example', 'https://www.paypal.com/donate/?hosted_button_id=QDSBYBVZ5W8SC',
+                    'https://www.paypal.com/donate?campaign_id=', 'https://paypal.com.evil.org/donate?campaign_id=ABCD1234EFGH5'):
+            with self.subTest(url=bad):
+                self.assertIsNone(p.normalize(bad))
+
+    def test_url_pattern_selects_only_fundraisers(self):
+        pattern = re.compile(PayPal.url_pattern, re.IGNORECASE)
+        self.assertTrue(pattern.search('https://www.paypal.com/donate?campaign_id=8K2YVE7TV84QY'))
+        self.assertTrue(pattern.search('https://www.paypal.com/donate/?locale.x=en_US&campaign_id=8K2YVE7TV84QY'))
+        self.assertFalse(pattern.search('https://www.paypal.com/paypalme/Example?locale.x=en_US'))
+        self.assertFalse(pattern.search('https://www.paypal.com/donate/?hosted_button_id=BYKYW5TVTR89W'))
+
+    def test_check_fetches_normalized_url(self):
+        fetch = FakeFetch(pp_page())
+        r = row(url='https://www.paypal.com/donate?campaign_id=ABCD1234EFGH5&fbclid=x', goal=Decimal('1000'),
+                raised=Decimal('200'))
+        o = check(PayPal(), r, fetch)
+        self.assertEqual((o.status, o.figures.raised), ('ok', Decimal('250.00')))
+        self.assertEqual(fetch.urls, ['https://www.paypal.com/donate/?campaign_id=ABCD1234EFGH5'])
+
+    def test_registered_but_not_default(self):
+        self.assertEqual([p.name for p in registry.enabled('paypal')], ['paypal'])
+        self.assertNotIn('paypal', registry.DEFAULT)
 
 
 if __name__ == '__main__':
