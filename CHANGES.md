@@ -151,3 +151,15 @@ which show "US$589.00 Donated So Far" (and, when there are offline gifts,
 
 **Drop it:** Delete `providers/gogetfunding.py`, its entry in
 `providers/__init__.py`, the bare-"$" branch in `runner.check()` and its tests.
+
+## 17. Stated currencies are adopted (2026-10-12)
+
+**What:** When a page states a currency that differs from the stored one, or
+none is stored, the sync now takes the page's currency, goal and amount
+instead of holding the row as `currency_mismatch` or `currency_unknown`. The
+run prints `CURRENCY old -> new`, and the 20% drop check is skipped for that
+row. Josh chose this for every platform on 2026-10-12. Bare "$" pages still
+never relabel a row.
+
+**Drop it:** Set `SYNC_HOLD_CURRENCY=1` in `/etc/bfep-sync.env` for the
+original rule, or revert this commit.

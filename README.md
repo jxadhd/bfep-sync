@@ -129,11 +129,14 @@ lives in `runner.check()`, so a new provider gets them automatically.
 All of these are covered by tests in `CheckRulesTest`:
 
 - A raised figure that falls by more than 20% is held as `suspicious_drop`.
-- No stored currency with an existing raised amount gives `currency_unknown`.
-  A page that shows only a bare "$" (GoGetFunding) keeps the stored currency
-  when it is a dollar currency, and gives `currency_unknown` otherwise.
-  A different currency is held as `currency_mismatch`, unless the goal matches,
-  in which case the platform's currency is adopted.
+- When the page states a currency that differs from the stored one, or none is
+  stored, the page's currency, goal and amount are adopted, and the run prints
+  `CURRENCY old -> new` for the change. The 20% drop check is skipped for that
+  row, since the amounts are in different currencies. A page that shows only a
+  bare "$" (GoGetFunding) keeps the stored currency when it is a dollar
+  currency, and gives `currency_unknown` otherwise. Set `SYNC_HOLD_CURRENCY=1`
+  to go back to the original rule (hold as `currency_mismatch` unless the goal
+  matches, and `currency_unknown` when none is stored).
 - 404 or 410 gives `not_found_pending` until 3 consecutive failures, then `not_found`.
   A parse error also counts as a failure.
 - 403 or 429 stops calling that platform for the rest of the run, with exit code 2.

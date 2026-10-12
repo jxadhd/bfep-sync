@@ -209,11 +209,11 @@ class SyncAgainstPostgresTest(PostgresTestCase):
         self.assertEqual(t[1][:6], ('USD', Decimal('50000.00'), Decimal('12345.50'), 'ok', 0, True))
         self.assertEqual(t[2][2:4], (Decimal('12345.50'), 'ok'))
         self.assertEqual(t[3][0], 'USD')                       # label adopted
-        self.assertEqual(t[4][2:4], (Decimal('10000.00'), 'currency_mismatch'))
+        self.assertEqual(t[4][0], 'USD')                       # stated currency adopted
         self.assertEqual(t[5][2:4], (Decimal('20000.00'), 'suspicious_drop'))
         self.assertEqual(t[6][3:5], ('not_found_pending', 1))
         self.assertEqual(t[7][3:5], ('parse_error', 1))
-        self.assertEqual(t[8][3], 'currency_unknown')
+        self.assertEqual(t[8][0], 'USD')                       # empty currency filled in
         self.assertEqual(t[9][3:5], ('http_503', 0))
         self.assertEqual(t[10][3], 'invalid_url')
         for rid in (11, 12, 13, 14):
@@ -310,6 +310,10 @@ class ParityWithOriginalTest(PostgresTestCase):
 
     def test_same_output_and_same_rows(self):
         copy = self.snapshot_db()
+        # The original script holds currency changes; SYNC_HOLD_CURRENCY=1 keeps that rule.
+        hold = mock.patch.dict(os.environ, {'SYNC_HOLD_CURRENCY': '1'})
+        hold.start()
+        self.addCleanup(hold.stop)
         for argv in ((), ('--apply',), ('--apply',), ('--apply',)):
             new_code, new_out, _ = self.run_new('--retries', '0', *argv)
             with mock.patch.dict(os.environ, {'PGDATABASE': copy}):

@@ -1,7 +1,8 @@
 """The sync loop: picks rows, asks each row's provider for figures, applies
 the safeguards and records the outcome.
 
-The decision rules in check() are the original sync.py rules, unchanged:
+The decision rules in check() are the original sync.py rules, except that a
+stated currency is now adopted (see below):
 
 * invalid URL -> 'invalid_url' (not a failure)
 * HTTP 403/429 -> Blocked: stop calling that platform for the rest of the run
@@ -10,16 +11,20 @@ The decision rules in check() are the original sync.py rules, unchanged:
 * other HTTP status -> 'http_<code>' (not a failure)
 * unparseable page -> 'parse_error' (a failure)
 * other exception -> 'error' (not a failure)
-* no stored currency but a stored raised amount -> 'currency_unknown'
 * page shows only a bare "$" -> the stored currency is kept when it is a
   dollar currency, otherwise 'currency_unknown' (GoGetFunding only)
-* currency differs and the goal does not match -> 'currency_mismatch'
-  (same goal under another label means the stored label is wrong, so the
-  platform's currency is adopted)
+* the page states a currency that differs from the stored one (or there is
+  none stored) -> the page's currency is adopted, and the drop check below is
+  skipped because the old and new amounts are in different currencies.
+  With SYNC_HOLD_CURRENCY=1 the original rules apply instead: no stored
+  currency but a stored raised amount -> 'currency_unknown'; a different
+  currency with a different goal -> 'currency_mismatch' (the same goal under
+  another label means the stored label is wrong, so it is adopted)
 * raised fell by more than DROP_LIMIT -> 'suspicious_drop' (held)
 """
 from __future__ import annotations
 
+import os
 import random
 import re
 import shlex
@@ -124,12 +129,15 @@ def check(provider: Provider, row: Row, fetch: Fetcher, retries: int = 0,
         if code not in DOLLAR_CODES:
             return Outcome('currency_unknown', None, False)
         fig = replace(fig, currency=code)
-    if not code:
-        if raised:
-            return Outcome('currency_unknown', None, False)
+    if os.environ.get('SYNC_HOLD_CURRENCY') == '1':
+        if not code:
+            if raised:
+                return Outcome('currency_unknown', None, False)
+        elif fig.currency != code:
+            if goal is None or fig.goal != goal:
+                return Outcome('currency_mismatch', None, False)
     elif fig.currency != code:
-        if goal is None or fig.goal != goal:
-            return Outcome('currency_mismatch', None, False)
+        return Outcome('ok', fig, False)    # adopted; the run prints a CURRENCY line
     if raised and raised > 0 and fig.raised < raised * (1 - DROP_LIMIT):
         return Outcome('suspicious_drop', None, False)
     return Outcome('ok', fig, False)
