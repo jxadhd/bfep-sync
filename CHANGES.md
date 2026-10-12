@@ -163,3 +163,18 @@ never relabel a row.
 
 **Drop it:** Set `SYNC_HOLD_CURRENCY=1` in `/etc/bfep-sync.env` for the
 original rule, or revert this commit.
+
+## 18. Spotfund provider (2026-10-12, off by default)
+
+**What:** Reads the raised amount, goal and donor count from a Spotfund
+page's "amount-raised-section" block ("$31,282 of $65,000 goal 479 Donors"),
+which the page shows twice; both copies must agree. The amounts carry a bare
+"$", so the currency comes from the story's own `currency_code` in the page's
+embedded data. Stored links are `spot.fund/<code>` short links (followed to
+the story) or `www.spotfund.com/story/<id>` pages; query strings are dropped.
+It only runs when `spotfund` is in `SYNC_PROVIDERS`. The fixture is trimmed
+from fundraiser 682's live page, and the saved pages for 682, 687, 717 and
+840 all parse to the figures shown on them.
+
+**Drop it:** Delete `providers/spotfund.py`, its entry in
+`providers/__init__.py`, `tests/fixtures/spotfund_ok.html` and its tests.

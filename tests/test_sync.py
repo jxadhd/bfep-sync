@@ -21,6 +21,7 @@ from bfep_sync.providers import Blocked, Figures, ParseError  # noqa: E402
 from bfep_sync.providers.gofundme import GoFundMe, parse_gofundme  # noqa: E402
 from bfep_sync.providers.gogetfunding import GoGetFunding, parse_gogetfunding  # noqa: E402
 from bfep_sync.providers.justgiving import JustGiving, parse_justgiving  # noqa: E402
+from bfep_sync.providers.spotfund import Spotfund, parse_spotfund  # noqa: E402
 from bfep_sync.runner import Row, check, run, shown_status  # noqa: E402
 
 FIXTURES = ROOT / 'tests' / 'fixtures'
@@ -354,6 +355,49 @@ class GoGetFundingTest(unittest.TestCase):
     def test_registered_but_not_default(self):
         self.assertEqual([p.name for p in registry.enabled('gogetfunding')], ['gogetfunding'])
         self.assertNotIn('gogetfunding', registry.DEFAULT)
+
+
+def sf_section(text: str) -> str:
+    return f'<div data-testid="amount-raised-section"><span>{text}</span> Donors</div>'
+
+
+class SpotfundTest(unittest.TestCase):
+
+    def test_reads_figures(self):
+        # Trimmed from the live page for fundraiser 682, 2026-10-12.
+        self.assertEqual(parse_spotfund(fixture('spotfund_ok.html')),
+                         Figures(Decimal('31282'), Decimal('65000'), 'USD', 479))
+
+    def test_no_goal_and_no_currency(self):
+        self.assertEqual(parse_spotfund(sf_section('$1,845.50 12')), Figures(Decimal('1845.50'), None, None, 12))
+
+    def test_story_currency_not_donation_currency(self):
+        page = (sf_section('$5 of $10 goal 1') + '{"goal":10,"is_zero_fee":false,"currency_code":"CAD"}'
+                '{"amount":5,"currency_code":"USD"}')
+        self.assertEqual(parse_spotfund(page).currency, 'CAD')
+
+    def test_rejects_bad_pages(self):
+        for page in ('<html>Story not found</html>',
+                     sf_section('$5 of $10 goal 1') + sf_section('$6 of $10 goal 1'),
+                     sf_section('Raised so far 1'),
+                     sf_section('$5 1') + '"is_zero_fee":true,"currency_code":"USD"'
+                     '"is_zero_fee":true,"currency_code":"CAD"'):
+            with self.subTest(page=page), self.assertRaises(ParseError):
+                parse_spotfund(page)
+
+    def test_normalize(self):
+        p = Spotfund()
+        self.assertEqual(p.normalize('spot.fund/AbC123'), 'https://spot.fund/AbC123')
+        self.assertEqual(p.normalize('https://www.spotfund.com/story/abc?utm_source=copy_link'),
+                         'https://www.spotfund.com/story/abc')
+        self.assertIsNone(p.normalize('https://www.spotfund.com/'))
+        self.assertIsNone(p.normalize('https://spot.fund.evil.org/x'))
+        # A page title stored in the url field (fundraiser 1108).
+        self.assertIsNone(p.normalize('Help Example Family Rebuild | Spotfund'))
+
+    def test_registered_but_not_default(self):
+        self.assertEqual([p.name for p in registry.enabled('spotfund')], ['spotfund'])
+        self.assertNotIn('spotfund', registry.DEFAULT)
 
 
 if __name__ == '__main__':
