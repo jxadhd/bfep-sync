@@ -1,0 +1,16 @@
+# Daily database backup to Cloudflare R2. Copy this and bfep-backup.timer to
+# /etc/systemd/system/, then: systemctl daemon-reload && systemctl enable --now bfep-backup.timer
+[Unit]
+Description=BFEP database backup to Cloudflare R2
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+# Runs as root: it needs Docker for pg_dump and reads the root-only
+# /etc/bfep-backup.env and /etc/bfep-backup.pg_service.conf.
+ExecStart=/usr/local/bin/bfep backup
+TimeoutStartSec=1h
+Nice=10
+IOSchedulingClass=idle
+PrivateTmp=yes

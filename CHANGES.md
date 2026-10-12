@@ -195,3 +195,17 @@ server; the fixture is synthetic, so dry-run before enabling.
 
 **Drop it:** Delete `providers/paypal.py`, its entry in
 `providers/__init__.py`, `tests/fixtures/paypal_ok.html` and its tests.
+
+## 20. Database backups to Cloudflare R2 (2026-10-12)
+
+**What:** `bfep backup` (`commands/backup`, `bfep_backup/`) dumps the
+databases through a throwaway pg_dump container, the same way `bfep update`
+does, and uploads one tar per run to R2, with a daily systemd timer
+(`deploy/bfep-backup.service`, `deploy/bfep-backup.timer`). Storage and
+request limits are enforced on our side before each request, so it stays in
+R2's free tier or refuses; see "Database backups to Cloudflare R2" in the
+README. Nothing else in the repo changes.
+
+**Drop it:** Delete `commands/backup`, `bfep_backup/`, `tests/test_backup.py`,
+the `deploy/bfep-backup.*` and `deploy/backup-role.sql` files and the README
+section, then on the server `systemctl disable --now bfep-backup.timer`.

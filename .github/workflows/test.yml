@@ -33,7 +33,7 @@ jobs:
       - name: Install
         run: pip install -r requirements.txt
       - name: Compile
-        run: python -m compileall -q bfep_sync tests
+        run: python -m compileall -q bfep_sync bfep_backup tests
       - name: Tests (fixtures and PostgreSQL)
         run: python -m unittest discover -s tests -v
       - name: Shell scripts

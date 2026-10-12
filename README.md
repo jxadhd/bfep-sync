@@ -77,6 +77,7 @@ a script in `commands/`:
 | `bfep sync test` | Runs the test suite on the live copy. |
 | `bfep sync deploy [ref]` | Deploys a branch or tag of this repo to `/opt/bfep-sync`, tests first. `DRY_RUN=1` shows what would change. |
 | `bfep sync rollback` | Swaps back to the copy from before the last deploy. Run it again to undo. |
+| `bfep backup` | Dumps the databases and uploads them to Cloudflare R2, never past the free tier (see below). |
 | `bfep help [command]` | Lists the commands, or shows one command's options. |
 
 `bfep sync deploy` works like `bfep deploy`. It fetches this repo into
@@ -103,6 +104,55 @@ git clone https://github.com/jxadhd/bfep-sync /opt/bfep-sync-src
 updates the command. `bfep-deploy` and `bfep-update` become one-line wrappers
 for `bfep deploy` and `bfep update`, and the originals are copied to
 `/usr/local/lib/bfep/replaced/`. It is safe to run again.
+
+## Database backups to Cloudflare R2
+
+`bfep backup` dumps each database in `BACKUP_DATABASES` with `pg_dump` from a
+throwaway `postgres:18-alpine` container, checks each dump reads back, packs
+them into one `bfep-db-<UTC time>.tar` (gpg-encrypted if
+`BACKUP_PASSPHRASE_FILE` is set) and uploads it to R2 as a single object. The
+`bfep-backup.timer` runs it daily at 04:15 NZ time. The R2 side is
+`bfep_backup/`, standard library only.
+
+It is built so it cannot cost money:
+
+- **Storage.** Before uploading it lists the whole bucket. Everything in the
+  bucket counts toward `BACKUP_MAX_GB` (default 8, and anything above 9 is
+  rejected, against the free 10 GB-month). Expired backups are deleted first,
+  then the oldest ones if more room is needed, all before the upload, so the
+  bucket never goes over the limit at any moment. The newest `BACKUP_KEEP_MIN`
+  are never deleted to make room; the upload is refused instead (exit 6) and
+  the local copy is kept. Only our own `bfep-db-*` objects under
+  `BACKUP_PREFIX` are ever deleted.
+- **Requests.** Every request is counted in
+  `/var/lib/bfep-backup/r2-requests.json` before it is sent, and refused once
+  the month's count would pass `BACKUP_MAX_CLASS_A` or `BACKUP_MAX_CLASS_B`
+  (default 1000 each; the free tier is 1 million and 10 million). A damaged
+  count file stops all requests until someone looks at it. A daily run makes
+  about 2 Class A requests (one listing, one upload); deletes are free.
+- **Storage class.** Uploads ask for `STANDARD`. Infrequent Access is not in
+  the free tier and bills retrievals.
+- **No multipart uploads**, so no half-finished uploads hold storage. One
+  backup over `BACKUP_MAX_OBJECT_GB` (default 2) is refused.
+
+| Command | What it does |
+|---|---|
+| `bfep backup` | Dump and upload. `DRY_RUN=1` dumps and shows what it would upload or delete, without doing it. |
+| `bfep backup check` | Checks the settings, connects to each database read-only and lists the bucket. |
+| `bfep backup list` | The backups in the bucket, its total and this month's request counts. |
+| `bfep backup usage` | This month's request counts, without contacting R2. |
+| `bfep backup fetch <name> [dir]` | Downloads one backup (one Class B request). |
+| `bfep backup status` | The timer and the last run. |
+
+Settings: `/etc/bfep-backup.env` (template `deploy/bfep-backup.env.example`)
+and `/etc/bfep-backup.pg_service.conf` (template
+`deploy/bfep-backup.pg_service.conf.example`), both root-only; the command
+refuses to run if either is readable by others. `deploy/backup-role.sql`
+creates an optional read-only `bfep_backup` database role.
+
+To restore, fetch a backup, unpack it (`gpg -d` first if encrypted), check
+`sha256sum -c SHA256SUMS`, then `pg_restore --no-owner -d <database> <name>.dump`
+into a scratch database first.
 
 ## How it is built
 

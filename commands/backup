@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# backup: dump the databases and keep copies in Cloudflare R2, inside the free tier
+#
+# Usage:  bfep backup                    dump, then upload to R2 (the timer runs this)
+#         DRY_RUN=1 bfep backup          dump, then show what would be uploaded or deleted
+#         bfep backup check              check the settings and the bucket; changes nothing
+#         bfep backup list               the backups in the bucket and its usage
+#         bfep backup usage              this month's R2 request counts (sends no request)
+#         bfep backup fetch <name> [dir] download one backup to restore from
+#         bfep backup status             the timer and the last run
+#
+# Each run dumps every database in BACKUP_DATABASES with pg_dump from a
+# throwaway postgres container (the host has no database client), checks each
+# dump reads back, packs them into one bfep-db-<UTC time>.tar (encrypted with
+# gpg when BACKUP_PASSPHRASE_FILE is set) and uploads it as one object.
+#
+# Nothing here can run up a bill: the bucket total is kept under BACKUP_MAX_GB
+# (default 8, never above 9 of the free 10 GB), old backups are deleted before
+# an upload rather than after, the newest BACKUP_KEEP_MIN are never deleted to
+# make room (the upload is refused instead), and every R2 request is counted
+# on disk first and refused past BACKUP_MAX_CLASS_A / _B a month (default 1000
+# each, against 1 million and 10 million free). A daily run uses about 60
+# Class A requests a month. Settings are in /etc/bfep-backup.env.
+set -euo pipefail
+umask 077
+
+ENV_FILE="${ENV_FILE:-/etc/bfep-backup.env}"
+RUN_LOCK="${RUN_LOCK:-/run/bfep-backup.lock}"
+UNIT="${UNIT:-bfep-backup}"
+PY="${PYTHON:-python3}"
+DRY_RUN="${DRY_RUN:-0}"
+BFEP_ROOT="${BFEP_ROOT:-$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)}"
+
+say() { printf '\n==> %s\n' "$*"; }
+die() { printf 'ERROR: %s\n' "$1" >&2; exit "${2:-1}"; }
+
+load_env() {
+  [[ -r "$ENV_FILE" ]] || die "cannot read $ENV_FILE (copy deploy/bfep-backup.env.example)" 4
+  [[ -z "$(find "$ENV_FILE" -perm /077)" ]] || die "$ENV_FILE holds the R2 key; run: chmod 600 $ENV_FILE" 4
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
+  PG_SERVICE_FILE="${PG_SERVICE_FILE:-/etc/bfep-backup.pg_service.conf}"
+  PG_DUMP_IMAGE="${PG_DUMP_IMAGE:-postgres:18-alpine}"
+  BACKUP_DATABASES="${BACKUP_DATABASES:-drupal bfdb}"
+  BACKUP_LOCAL_DIR="${BACKUP_LOCAL_DIR:-/var/backups/bfep-db}"
+  BACKUP_LOCAL_KEEP="${BACKUP_LOCAL_KEEP:-3}"
+  [[ "$BACKUP_LOCAL_KEEP" =~ ^[0-9]+$ ]] || die "BACKUP_LOCAL_KEEP must be a whole number" 4
+}
+
+r2() { (cd "$BFEP_ROOT" && "$PY" -m bfep_backup "$@"); }
+
+# pg_dump/pg_restore from the throwaway container, reading the service file.
+pg() {
+  docker run --rm -i --network host \
+    -v "$PG_SERVICE_FILE:/run/pg_service.conf:ro" -e PGSERVICEFILE=/run/pg_service.conf \
+    "$PG_DUMP_IMAGE" "$@"
+}
+
+check_services() {
+  [[ -r "$PG_SERVICE_FILE" ]] || die "cannot read $PG_SERVICE_FILE (copy deploy/bfep-backup.pg_service.conf.example)" 4
+  [[ -z "$(find "$PG_SERVICE_FILE" -perm /077)" ]] || die "$PG_SERVICE_FILE holds passwords; run: chmod 600 $PG_SERVICE_FILE" 4
+  local db
+  for db in $BACKUP_DATABASES; do
+    [[ "$db" =~ ^[A-Za-z0-9_-]+$ ]] || die "BACKUP_DATABASES: bad name '$db'" 4
+    grep -q "^\[$db\]" "$PG_SERVICE_FILE" || die "no [$db] section in $PG_SERVICE_FILE" 4
+  done
+  if [[ -n "${BACKUP_PASSPHRASE_FILE:-}" ]]; then
+    command -v gpg >/dev/null || die "BACKUP_PASSPHRASE_FILE is set but gpg is not installed" 4
+    [[ -s "$BACKUP_PASSPHRASE_FILE" ]] || die "BACKUP_PASSPHRASE_FILE $BACKUP_PASSPHRASE_FILE is missing or empty" 4
+  fi
+}
+
+run() {
+  load_env
+  check_services
+  exec 8>"$RUN_LOCK"
+  flock -n 8 || die "another backup is running"
+
+  local ts name db out dumps=()
+  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  name="bfep-db-$ts.tar"
+  mkdir -p "$BACKUP_LOCAL_DIR"
+  WORK="$(mktemp -d "$BACKUP_LOCAL_DIR/.work-XXXXXX")"
+  trap 'rm -rf "$WORK"' EXIT
+  local work="$WORK"
+
+  for db in $BACKUP_DATABASES; do
+    say "Dumping $db"
+    pg pg_dump -Fc -d "service=$db" >"$work/$db.dump" || die "pg_dump of $db failed"
+    [[ -s "$work/$db.dump" ]] || die "the dump of $db is empty"
+    # Reads the archive's table of contents back, so a truncated dump fails here.
+    pg pg_restore --list <"$work/$db.dump" >"$work/$db.toc" || die "the dump of $db does not read back"
+    echo "$(du -h "$work/$db.dump" | cut -f1), $(grep -c ' TABLE DATA ' "$work/$db.toc" || true) tables"
+    rm "$work/$db.toc"
+    dumps+=("$db.dump")
+  done
+  (cd "$work" && sha256sum -- "${dumps[@]}" >SHA256SUMS)
+  tar -cf "$work/$name" -C "$work" SHA256SUMS "${dumps[@]}"
+
+  if [[ -n "${BACKUP_PASSPHRASE_FILE:-}" ]]; then
+    gpg --batch --yes --quiet --pinentry-mode loopback --passphrase-file "$BACKUP_PASSPHRASE_FILE" \
+      --symmetric --cipher-algo AES256 -o "$work/$name.gpg" "$work/$name"
+    rm "$work/$name"
+    name="$name.gpg"
+  fi
+  out="$BACKUP_LOCAL_DIR/$name"
+  mv "$work/$name" "$out"
+  echo "Local copy: $out ($(du -h "$out" | cut -f1))"
+
+  say "Uploading to R2"
+  local rc=0
+  if [[ "$DRY_RUN" == "1" ]]; then
+    r2 upload --dry-run "$out" || rc=$?
+    rm -f "$out"
+  else
+    r2 upload "$out" || rc=$?
+    # Keep the newest local copies; the one just made is kept even if the
+    # upload failed, so nothing is lost.
+    # shellcheck disable=SC2012  # names are our own timestamps
+    ls -1t "$BACKUP_LOCAL_DIR"/bfep-db-*.tar* 2>/dev/null | tail -n +"$((BACKUP_LOCAL_KEEP + 1))" \
+      | { grep -vxF "$out" || true; } | xargs -r rm -f
+  fi
+  [[ $rc -eq 0 ]] || die "upload did not complete (exit $rc); the local copy is kept" "$rc"
+  say "Backup complete: $name"
+}
+
+check() {
+  load_env
+  check_services
+  say "Settings"
+  echo "Settings file:  $ENV_FILE"
+  echo "Databases:      $BACKUP_DATABASES (from $PG_SERVICE_FILE)"
+  echo "Bucket:         ${R2_BUCKET:-?} under ${BACKUP_PREFIX:-db/}"
+  echo "Encryption:     ${BACKUP_PASSPHRASE_FILE:+gpg with $BACKUP_PASSPHRASE_FILE}${BACKUP_PASSPHRASE_FILE:-off}"
+  echo "Local copies:   $BACKUP_LOCAL_KEEP in $BACKUP_LOCAL_DIR"
+  say "Databases (read-only connection test)"
+  local db
+  for db in $BACKUP_DATABASES; do
+    printf '%s: ' "$db"
+    pg psql -X -At -d "service=$db" \
+      -c "select current_user || ' on ' || current_database() || ', ' || pg_size_pretty(pg_database_size(current_database())) || ', server ' || current_setting('server_version')" \
+      || echo "FAILED"
+  done
+  say "Bucket (one Class A request)"
+  r2 list
+}
+
+status() {
+  systemctl list-timers "$UNIT.timer" --all --no-pager | head -2
+  echo
+  systemctl show "$UNIT.service" -p ActiveState -p Result -p ExecMainExitTimestamp -p ExecMainStatus --no-pager
+  echo
+  journalctl -u "$UNIT" -n 15 --no-pager -o cat
+}
+
+case "${1:-run}" in
+  run) run ;;
+  check) check ;;
+  list) load_env; r2 list ;;
+  usage) load_env; r2 usage ;;
+  fetch)
+    load_env
+    [[ -n "${2:-}" ]] || die "usage: bfep backup fetch <name> [dir]" 2
+    r2 fetch "$2" "$(readlink -f "${3:-.}")"
+    ;;
+  status) status ;;
+  *) die "unknown option '$1'. Run 'bfep help backup'." 2 ;;
+esac

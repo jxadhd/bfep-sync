@@ -1,0 +1,11 @@
+# Once a day in the early morning, NZ time, after the 02:30 sync.
+[Unit]
+Description=Run the BFEP database backup
+
+[Timer]
+OnCalendar=*-*-* 04:15:00 Pacific/Auckland
+RandomizedDelaySec=20min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,20 @@
+# Copy to /etc/bfep-backup.pg_service.conf, then: chown root:root and chmod 600.
+# One section per database in BACKUP_DATABASES. The role needs to read every
+# table: the database owner works, or the read-only bfep_backup role from
+# backup-role.sql.
+
+[drupal]
+host=data.joshcross.co.nz
+port=5432
+dbname=drupal
+user=bfep_backup
+password=change-me
+sslmode=prefer
+
+[bfdb]
+host=data.joshcross.co.nz
+port=5432
+dbname=bfdb
+user=bfep_backup
+password=change-me
+sslmode=prefer
