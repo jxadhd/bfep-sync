@@ -73,7 +73,7 @@ a script in `commands/`:
 | `bfep update` | Updates Drupal core and contrib by rebuilding the image, with backup and rollback (the former `bfep-update`). |
 | `bfep sync [--apply] [--limit N]` | Runs the sync now with the settings in `/etc/bfep-sync.env`. A dry run unless `--apply`. |
 | `bfep sync status` | The deployed version, the timer and the last run. |
-| `bfep sync log [N]` | The last N lines of the sync's log. |
+| `bfep sync log [N]` | The last N lines (default 50) of the sync's log from the last 24 hours. Add `--since 3d` (or `12h`, `2026-10-01`) for a longer window, or `--all` for the whole log, which can take a while to search. |
 | `bfep sync test` | Runs the test suite on the live copy. |
 | `bfep sync deploy [ref]` | Deploys a branch or tag of this repo to `/opt/bfep-sync`, tests first. `DRY_RUN=1` shows what would change. |
 | `bfep sync rollback` | Swaps back to the copy from before the last deploy. Run it again to undo. |
