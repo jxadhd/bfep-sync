@@ -153,7 +153,10 @@ rollback() {
 
 case "${1:-}" in
   status) status ;;
-  log) journalctl -u "$UNIT" -n "${2:-50}" --no-pager -o cat ;;
+  log)
+    # journalctl can take 10+ s to search a large journal; say so rather than look hung.
+    [ -t 1 ] && echo "Reading the sync log (this can take a few seconds)..." >&2
+    journalctl -u "$UNIT" -n "${2:-50}" --no-pager -o cat ;;
   test) cd "$LIVE" && exec "$PY" -m unittest discover -s tests ;;
   deploy) shift; deploy "$@" ;;
   rollback) rollback ;;
