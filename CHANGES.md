@@ -178,3 +178,20 @@ from fundraiser 682's live page, and the saved pages for 682, 687, 717 and
 
 **Drop it:** Delete `providers/spotfund.py`, its entry in
 `providers/__init__.py`, `tests/fixtures/spotfund_ok.html` and its tests.
+
+## 19. PayPal fundraiser provider (2026-10-12, off by default)
+
+**What:** Reads PayPal fundraisers (`paypal.com/donate?campaign_id=...`)
+from the data embedded in the page: `campaignTotalAmountRaised`,
+`campaignTargetAmount` (empty or 0 means no goal), `campaignTotalNumberOfTxn`
+as the donation count and `donationCode` as the currency. The page's
+`productId` must equal the link's `campaign_id`, and each field must have one
+value. Closed (INACTIVE) campaigns still report their final figures.
+`paypal.me` profiles and `hosted_button_id` donate buttons show no totals, so
+the provider's URL pattern leaves them out. Links are reduced to
+`https://www.paypal.com/donate/?campaign_id=<id>`, dropping tracking
+parameters. Field names come from fundraiser 1972's page as fetched on the
+server; the fixture is synthetic, so dry-run before enabling.
+
+**Drop it:** Delete `providers/paypal.py`, its entry in
+`providers/__init__.py`, `tests/fixtures/paypal_ok.html` and its tests.

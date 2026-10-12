@@ -112,6 +112,7 @@ bfep_sync/
   providers/gofundme.py   GoFundMe: original normalize() and parse_gofundme(), unchanged rules
   providers/gogetfunding.py GoGetFunding page text parser (off until listed)
   providers/justgiving.py JustGiving via its REST API (off until configured)
+  providers/paypal.py     PayPal fundraiser (donate?campaign_id=) page data parser (off until listed)
   providers/spotfund.py   Spotfund amount-raised section parser (off until listed)
   providers/__init__.py   registry and SYNC_PROVIDERS handling
   runner.py               check() decision rules, retries, the run loop
@@ -163,6 +164,7 @@ All of these are covered by tests in `CheckRulesTest`:
 |---|---|---|
 | GoGetFunding | Page scrape of the visible sidebar text | Implemented, off by default, **fixtures are synthetic: dry-run before enabling** |
 | Spotfund | Page scrape of the amount-raised section, currency from the story data | Implemented, off by default, fixture saved from a live page |
+| PayPal fundraisers | Page data fields next to the campaign's productId; paypal.me and donate buttons have no totals and are left out | Implemented, off by default, **fixture is synthetic: dry-run before enabling** |
 | JustGiving | Official REST API, needs a free app ID | Implemented, off by default, **unverified against the live API** |
 | Chuffed | Page scrape (Next.js data, like GoFundMe) | Not started: needs a real page saved as a fixture |
 | LaunchGood | Page scrape | Not started: needs a fixture |
