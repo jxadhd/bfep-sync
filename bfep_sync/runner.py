@@ -63,6 +63,7 @@ class Outcome:
     status: str
     figures: Figures | None
     failed: bool
+    detail: str = ''   # why, for parse_error and error; printed, never stored
 
 
 def provider_for(url: str | None, providers: Iterable[Provider]) -> Provider | None:
@@ -110,12 +111,12 @@ def check(provider: Provider, row: Row, fetch: Fetcher, retries: int = 0,
         if e.code in (404, 410):
             return Outcome('not_found', None, True)
         return Outcome(f'http_{e.code}', None, False)
-    except ParseError:
-        return Outcome('parse_error', None, True)
+    except ParseError as e:
+        return Outcome('parse_error', None, True, str(e))
     except NotConfigured:
         return Outcome('not_configured', None, False)
-    except Exception:
-        return Outcome('error', None, False)
+    except Exception as e:
+        return Outcome('error', None, False, f'{type(e).__name__}: {e}')
 
     code = (row.currency_code or '').strip()
     raised, goal = row.raised, row.goal
@@ -198,7 +199,7 @@ def run(store, providers: list[Provider], *, apply: bool, limit: int = 0, after:
             if changed:
                 result.changed += 1
         else:
-            out(f'{row.id}: {outcome.status}')
+            out(f'{row.id}: {outcome.status}' + (f' ({outcome.detail})' if outcome.detail else ''))
         if apply:
             if outcome.status == 'ok':
                 store.record_ok(row.id, outcome.figures)

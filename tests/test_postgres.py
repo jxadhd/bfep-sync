@@ -20,6 +20,7 @@ import contextlib
 import io
 import os
 import pathlib
+import re
 import runpy
 import sys
 import tempfile
@@ -314,7 +315,9 @@ class ParityWithOriginalTest(PostgresTestCase):
             with mock.patch.dict(os.environ, {'PGDATABASE': copy}):
                 old_code, old_out = self.run_original(*argv)
             self.assertEqual(new_code, old_code)
-            self.assertEqual(new_out.splitlines(), old_out.splitlines())
+            # The new lines add a reason to parse_error and error, e.g. "7: parse_error (no ...)".
+            new_lines = [re.sub(r'^(\d+: (?:parse_)?error) \(.*\)$', r'\1', line) for line in new_out.splitlines()]
+            self.assertEqual(new_lines, old_out.splitlines())
         new_rows = self.table()
         self.dbname, orig = copy, self.dbname
         try:
