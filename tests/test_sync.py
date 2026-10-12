@@ -310,6 +310,12 @@ class GoGetFundingTest(unittest.TestCase):
         self.assertEqual(parse_gogetfunding(closed), Figures(Decimal('3411.00'), None, 'USD', 87))
         with self.assertRaises(ParseError):
             parse_gogetfunding(ggf_page('US$5.00 Donated So Far Raised offline: £1.00 Total: £6.00'))
+        # Ringgit (campaign 1196, 2026-10-12).
+        myr = ggf_page('Donors0 RM0.00 Donated So Far Raised offline: RM20,000.00 Total: RM20,000.00')
+        self.assertEqual(parse_gogetfunding(myr), Figures(Decimal('20000.00'), None, 'MYR', 0))
+        # A word ending in "rm" is not a prefix.
+        with self.assertRaises(ParseError):
+            parse_gogetfunding(ggf_page('farm 500 raised'))
 
     def test_story_text_alone_is_not_a_figure(self):
         with self.assertRaises(ParseError):

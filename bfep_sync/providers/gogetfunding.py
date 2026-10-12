@@ -31,11 +31,13 @@ HOSTS = {'gogetfunding.com', 'www.gogetfunding.com'}
 # Currency prefix -> ISO code. None means the prefix alone does not identify the currency.
 SYMBOLS = {'$': None, '£': 'GBP', '€': 'EUR',
            'US$': 'USD', 'A$': 'AUD', 'AU$': 'AUD', 'NZ$': 'NZD',
-           'C$': 'CAD', 'CA$': 'CAD', 'HK$': 'HKD', 'S$': 'SGD', 'SG$': 'SGD'}
+           'C$': 'CAD', 'CA$': 'CAD', 'HK$': 'HKD', 'S$': 'SGD', 'SG$': 'SGD',
+           'RM': 'MYR'}
 
 SCRIPTS = re.compile(r'<(script|style)\b.*?</\1\s*>', re.S | re.I)
 TAGS = re.compile(r'<[^>]+>')
-AMOUNT = r'(?<![A-Za-z])((?:[A-Za-z]{1,3})?[$£€¥])\s?(\d[\d,]*(?:\.\d+)?)'
+# A symbol, optionally after letters ("US$"), or a letters-only prefix GoGetFunding uses ("RM").
+AMOUNT = r'(?<![A-Za-z])(RM|(?:[A-Za-z]{1,3})?[$£€¥])\s?(\d[\d,]*(?:\.\d+)?)'
 WITH_GOAL = re.compile(AMOUNT + r'\s*raised of\s*' + AMOUNT + r'\s*goal', re.I)
 NO_GOAL = re.compile(AMOUNT + r'\s*raised\b', re.I)
 DONATED = re.compile(AMOUNT + r'\s*Donated So Far', re.I)
