@@ -109,6 +109,26 @@ class BfepCommandTest(unittest.TestCase):
         self.assertEqual(self.bfep('../bin/bfep').returncode, 2)
         self.assertEqual(self.bfep('help', '../x').returncode, 2)
 
+    # bfep sync log
+
+    def test_log_searches_the_last_day_unless_told_otherwise(self):
+        fake = self.tmp / 'fakebin'
+        fake.mkdir()
+        (fake / 'journalctl').write_text('#!/bin/sh\necho "$@"\n')
+        (fake / 'journalctl').chmod(0o755)
+        env = {'PATH': f"{fake}:{os.environ['PATH']}", 'UNIT': 'bfep-sync'}
+        base = '-u bfep-sync -n {} --no-pager -o cat'
+        for args, expected in ((['log'], base.format(50) + ' --since -24h'),
+                               (['log', '200'], base.format(200) + ' --since -24h'),
+                               (['log', '--since', '3d'], base.format(50) + ' --since -3d'),
+                               (['log', '--since=2026-10-01', '10'], base.format(10) + ' --since 2026-10-01'),
+                               (['log', '--all'], base.format(50))):
+            with self.subTest(args=args):
+                r = self.bfep('sync', *args, env=env)
+                self.assertEqual((r.returncode, r.stdout.strip()), (0, expected), r.stderr)
+        self.assertEqual(self.bfep('sync', 'log', '--since', env=env).returncode, 1)
+        self.assertEqual(self.bfep('sync', 'log', 'lots', env=env).returncode, 1)
+
     # bfep sync deploy / rollback
 
     def test_deploy_keeps_wip_and_previous_copy(self):

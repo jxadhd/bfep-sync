@@ -3,7 +3,9 @@
 #
 # Usage:  bfep sync [--apply] [--limit N] [...]  run the sync now (a dry run unless --apply)
 #         bfep sync status                       deployed version, timer, last run
-#         bfep sync log [N]                      the last N lines of its log (default 50)
+#         bfep sync log [N] [--since WHEN|--all]  the last N lines of its log (default 50)
+#                                                from the last 24 hours; WHEN is e.g. 3d,
+#                                                12h or 2026-10-01; --all searches it all
 #         bfep sync test                         run the test suite on the live copy
 #         bfep sync deploy [ref]                 deploy a branch or tag from GitHub (default: main)
 #         DRY_RUN=1 bfep sync deploy             show what would change, touch nothing
@@ -151,9 +153,30 @@ rollback() {
   say "Now running $(version "$LIVE")"
 }
 
+show_log() {
+  # Searching the whole journal took ~13 s on butterfly, so by default only
+  # the last 24 hours are searched (a nightly run always falls inside that).
+  local lines=50 since=-24h
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --all) since= ;;
+      --since) [ $# -ge 2 ] || die "--since needs a time, e.g. 3d, 12h or 2026-10-01"
+               since="$2"; shift ;;
+      --since=*) since="${1#--since=}" ;;
+      *[!0-9]* | "") die "unknown: bfep sync log $1 (see bfep help sync)" ;;
+      *) lines="$1" ;;
+    esac
+    shift
+  done
+  # "3d" and "12h" mean that long ago, as journalctl's "-3d" does.
+  case "$since" in [0-9]*[smhdw]) since="-$since" ;; esac
+  [ -t 1 ] && echo "Reading the sync log${since:+ since $since} (this can take a few seconds)..." >&2
+  journalctl -u "$UNIT" -n "$lines" --no-pager -o cat ${since:+--since "$since"}
+}
+
 case "${1:-}" in
   status) status ;;
-  log) journalctl -u "$UNIT" -n "${2:-50}" --no-pager -o cat ;;
+  log) shift; show_log "$@" ;;
   test) cd "$LIVE" && exec "$PY" -m unittest discover -s tests ;;
   deploy) shift; deploy "$@" ;;
   rollback) rollback ;;
