@@ -18,6 +18,7 @@ BACKUP_ROOT="${BACKUP_ROOT:-/opt/backups/drupal}"
 SITE_URL="${SITE_URL:-https://butterfly.joshcross.co.nz/}"
 CHECK="${CHECK:-0}"
 FILES_BACKUP="${FILES_BACKUP:-0}"   # 1 = also tar sites/default/files
+PG_DUMP_IMAGE="${PG_DUMP_IMAGE:-postgres:18-alpine}"  # used when the container has no pg_dump
 KEEP="${KEEP:-5}"
 
 say() { printf '\n==> %s\n' "$*"; }
@@ -92,13 +93,22 @@ if [[ -n "${DB_DUMP:-}" ]]; then
   [[ -s "$DB_DUMP" ]] || die "DB_DUMP '$DB_DUMP' is missing or empty"
   [[ -n "$(find "$DB_DUMP" -mmin -120)" ]] || die "DB_DUMP is over 2 hours old; make a fresh dump"
   cp "$DB_DUMP" "$B/db-manual.dump"
-else
-  if ! drush sql:dump --gzip --result-file=/tmp/bfep-db.sql >/dev/null; then
-    die "automatic database dump failed (no database client in the container?). Make a dump yourself and run: DB_DUMP=/path/to/dump bfep-update"
-  fi
+elif drush sql:dump --gzip --result-file=/tmp/bfep-db.sql >/dev/null 2>&1; then
   docker cp "$CONTAINER:/tmp/bfep-db.sql.gz" "$B/db.sql.gz"
   docker exec "$CONTAINER" rm -f /tmp/bfep-db.sql.gz
   [[ -s "$B/db.sql.gz" ]] || die "database backup is empty; refusing to continue"
+else
+  # The Drupal image has no psql/pg_dump, so drush cannot dump. Run pg_dump
+  # from a throwaway postgres container with Drupal's own connection details.
+  echo "No database client in the container; dumping with $PG_DUMP_IMAGE instead"
+  pgenv="$(drush php:eval '$i = \Drupal\Core\Database\Database::getConnectionInfo("default")["default"]; if ($i["driver"] !== "pgsql") { exit(1); } echo "PGHOST=$i[host]\nPGPORT=" . ($i["port"] ?: 5432) . "\nPGDATABASE=$i[database]\nPGUSER=$i[username]\nPGPASSWORD=$i[password]\n";')" \
+    || die "automatic database dump failed (not PostgreSQL?). Make a dump yourself and run: DB_DUMP=/path/to/dump bfep update"
+  if ! docker run --rm --network host --env-file /dev/stdin "$PG_DUMP_IMAGE" pg_dump -Fc <<<"$pgenv" > "$B/db.dump"; then
+    unset pgenv
+    die "pg_dump failed. Make a dump yourself and run: DB_DUMP=/path/to/dump bfep update"
+  fi
+  unset pgenv
+  [[ -s "$B/db.dump" ]] || die "database backup is empty; refusing to continue"
 fi
 docker cp "$CONTAINER:/opt/drupal/web/sites/default/settings.php" "$B/settings.php" 2>/dev/null || true
 if [[ "$FILES_BACKUP" == "1" ]]; then
