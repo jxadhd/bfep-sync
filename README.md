@@ -112,6 +112,7 @@ bfep_sync/
   providers/gofundme.py   GoFundMe: original normalize() and parse_gofundme(), unchanged rules
   providers/gogetfunding.py GoGetFunding page text parser (off until listed)
   providers/justgiving.py JustGiving via its REST API (off until configured)
+  providers/spotfund.py   Spotfund amount-raised section parser (off until listed)
   providers/__init__.py   registry and SYNC_PROVIDERS handling
   runner.py               check() decision rules, retries, the run loop
   store.py                all SQL (the only psycopg2 import) and the advisory lock
@@ -133,7 +134,7 @@ All of these are covered by tests in `CheckRulesTest`:
   stored, the page's currency, goal and amount are adopted, and the run prints
   `CURRENCY old -> new` for the change. The 20% drop check is skipped for that
   row, since the amounts are in different currencies. A page that shows only a
-  bare "$" (GoGetFunding) keeps the stored currency when it is a dollar
+  bare "$" (GoGetFunding, or Spotfund without a story currency) keeps the stored currency when it is a dollar
   currency, and gives `currency_unknown` otherwise. Set `SYNC_HOLD_CURRENCY=1`
   to go back to the original rule (hold as `currency_mismatch` unless the goal
   matches, and `currency_unknown` when none is stored).
@@ -161,6 +162,7 @@ All of these are covered by tests in `CheckRulesTest`:
 | Platform | Approach | Status |
 |---|---|---|
 | GoGetFunding | Page scrape of the visible sidebar text | Implemented, off by default, **fixtures are synthetic: dry-run before enabling** |
+| Spotfund | Page scrape of the amount-raised section, currency from the story data | Implemented, off by default, fixture saved from a live page |
 | JustGiving | Official REST API, needs a free app ID | Implemented, off by default, **unverified against the live API** |
 | Chuffed | Page scrape (Next.js data, like GoFundMe) | Not started: needs a real page saved as a fixture |
 | LaunchGood | Page scrape | Not started: needs a fixture |

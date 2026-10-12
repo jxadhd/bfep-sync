@@ -11,11 +11,13 @@ from .base import Blocked, Fetcher, Figures, NotConfigured, ParseError, Provider
 from .gofundme import GoFundMe
 from .gogetfunding import GoGetFunding
 from .justgiving import JustGiving
+from .spotfund import Spotfund
 
 PROVIDERS: dict[str, type[Provider]] = {
     'gofundme': GoFundMe,
     'gogetfunding': GoGetFunding,
     'justgiving': JustGiving,
+    'spotfund': Spotfund,
 }
 
 #: Providers that run when SYNC_PROVIDERS is not set. GoFundMe only, which is
@@ -37,4 +39,5 @@ def enabled(names: str | None = None) -> list[Provider]:
 
 
 __all__ = ['Blocked', 'Fetcher', 'Figures', 'NotConfigured', 'ParseError', 'Provider',
-           'PROVIDERS', 'DEFAULT', 'enabled', 'GoFundMe', 'GoGetFunding', 'JustGiving']
+           'PROVIDERS', 'DEFAULT', 'enabled', 'GoFundMe', 'GoGetFunding', 'JustGiving',
+           'Spotfund']
