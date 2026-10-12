@@ -9,6 +9,7 @@ import pathlib
 import sys
 import unittest
 import urllib.error
+from unittest import mock
 from decimal import Decimal
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -139,11 +140,20 @@ class CheckRulesTest(unittest.TestCase):
         o = self.outcome(row(), OSError('reset'))
         self.assertEqual((o.status, o.failed, o.detail), ('error', False, 'OSError: reset'))
 
+    def test_stated_currency_is_adopted(self):
+        # Stored EUR 20000, page USD 50000: take the page's currency, goal and amount,
+        # and skip the drop check, which would compare EUR with USD.
+        o = self.outcome(row(currency_code='EUR', goal=Decimal('20000'), raised=Decimal('90000')), self.ok)
+        self.assertEqual((o.status, o.figures.currency, o.figures.goal), ('ok', 'USD', Decimal('50000')))
+        self.assertEqual(self.outcome(row(currency_code='', raised=Decimal('100')), self.ok).status, 'ok')
+
+    @mock.patch.dict('os.environ', {'SYNC_HOLD_CURRENCY': '1'})
     def test_currency_unknown(self):
         self.assertEqual(self.outcome(row(currency_code=''), self.ok).status, 'currency_unknown')
         # No stored currency and nothing raised yet: adopt the platform's.
         self.assertEqual(self.outcome(row(currency_code=None, raised=None), self.ok).status, 'ok')
 
+    @mock.patch.dict('os.environ', {'SYNC_HOLD_CURRENCY': '1'})
     def test_currency_mismatch_held_unless_goal_matches(self):
         self.assertEqual(self.outcome(row(currency_code='EUR', goal=Decimal('1')), self.ok).status, 'currency_mismatch')
         self.assertEqual(self.outcome(row(currency_code='EUR', goal=None), self.ok).status, 'currency_mismatch')
