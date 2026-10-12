@@ -145,6 +145,9 @@ only a bare "$", `runner.check()` keeps the row's stored currency if it is a
 dollar currency (USD, AUD, NZD, CAD, HKD, SGD) and records `currency_unknown`
 otherwise, so a "$" page never relabels a row. The test fixture is built from
 the page's text shapes, not saved from the site, so dry-run it before enabling.
+Since 2026-10-12 it also reads campaigns without a goal and closed ones,
+which show "US$589.00 Donated So Far" (and, when there are offline gifts,
+"Raised offline: $505.00 Total: $3,411.00", where the total is used).
 
 **Drop it:** Delete `providers/gogetfunding.py`, its entry in
 `providers/__init__.py`, the bare-"$" branch in `runner.check()` and its tests.

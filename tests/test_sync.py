@@ -289,6 +289,22 @@ class GoGetFundingTest(unittest.TestCase):
                          Figures(Decimal('1000'), None, 'NZD', None))
         self.assertIsNone(parse_gogetfunding(ggf_page('$80 raised of $100 goal')).currency)
 
+    def test_donated_so_far_layout(self):
+        # Text shapes from live pages (campaigns 986 and 1109), 2026-10-12.
+        page = ggf_page('Story Updates 0 Donors 12 Followers 0 Previous Next US$589.00 Donated So Far --> '
+                        'Help this ongoing fundraising campaign')
+        self.assertEqual(parse_gogetfunding(page), Figures(Decimal('589.00'), None, 'USD', 12))
+        closed = ggf_page('Updates 2 Donors 87 Followers 5 Previous Next US$2,906.00 Donated So Far --> '
+                          'Raised offline: $505.00 Total: $3,411.00 The campaign owner has stopped the page '
+                          'from accepting further donations.')
+        self.assertEqual(parse_gogetfunding(closed), Figures(Decimal('3411.00'), None, 'USD', 87))
+        with self.assertRaises(ParseError):
+            parse_gogetfunding(ggf_page('US$5.00 Donated So Far Raised offline: £1.00 Total: £6.00'))
+
+    def test_story_text_alone_is_not_a_figure(self):
+        with self.assertRaises(ParseError):
+            parse_gogetfunding(ggf_page('The money raised will cover evacuation and travel expenses.'))
+
     def test_donor_count_from_tab_bar(self):
         page = ggf_page('US$5 raised of $10 goal <a>Updates 3 Donors 1,204 Followers 9</a>')
         self.assertEqual(parse_gogetfunding(page).donations, 1204)
