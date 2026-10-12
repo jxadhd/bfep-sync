@@ -133,11 +133,11 @@ class CheckRulesTest(unittest.TestCase):
 
     def test_parse_error_counts_as_failure(self):
         o = self.outcome(row(), fixture('gofundme_no_next_data.html'))
-        self.assertEqual((o.status, o.failed), ('parse_error', True))
+        self.assertEqual((o.status, o.failed, o.detail), ('parse_error', True, 'no __NEXT_DATA__ block'))
 
     def test_network_error(self):
         o = self.outcome(row(), OSError('reset'))
-        self.assertEqual((o.status, o.failed), ('error', False))
+        self.assertEqual((o.status, o.failed, o.detail), ('error', False, 'OSError: reset'))
 
     def test_currency_unknown(self):
         self.assertEqual(self.outcome(row(currency_code=''), self.ok).status, 'currency_unknown')
