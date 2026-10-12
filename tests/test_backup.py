@@ -335,7 +335,10 @@ class CommandTest(unittest.TestCase):
             f'R2_SECRET_ACCESS_KEY=secret\nBACKUP_LEDGER={self.tmp}/ledger.json\n'
             f'PG_SERVICE_FILE={svc}\nBACKUP_LOCAL_DIR={self.local}\nBACKUP_LOCAL_KEEP=1\n')
         self.envfile.chmod(0o600)
-        self.env = {**os.environ, 'PATH': f'{bindir}:{os.environ["PATH"]}',
+        # A deploy runs this suite, possibly as DRY_RUN=1 bfep sync deploy.
+        outer = {k: v for k, v in os.environ.items()
+                 if k not in ('DRY_RUN', 'PYTHON', 'UNIT') and not k.startswith(('R2_', 'BACKUP_', 'PG'))}
+        self.env = {**outer, 'PATH': f'{bindir}:{os.environ["PATH"]}',
                     'ENV_FILE': str(self.envfile), 'RUN_LOCK': str(self.tmp / 'run.lock')}
 
     def bfep(self, *args, **env):
