@@ -116,6 +116,7 @@ bfep_sync/
   providers/justgiving.py JustGiving via its REST API (off until configured)
   providers/paypal.py     PayPal fundraiser (donate?campaign_id=) page data parser (off until listed)
   providers/spotfund.py   Spotfund amount-raised section parser (off until listed)
+  providers/steunactie.py Steunactie (Belgium) page text parser (off until listed)
   providers/__init__.py   registry and SYNC_PROVIDERS handling
   runner.py               check() decision rules, retries, the run loop
   store.py                all SQL (the only psycopg2 import) and the advisory lock
@@ -171,6 +172,7 @@ All of these are covered by tests in `CheckRulesTest`:
 | PayPal fundraisers | Page data fields next to the campaign's productId; paypal.me and donate buttons have no totals and are left out | Implemented, off by default, **fixture is synthetic: dry-run before enabling** |
 | JustGiving | Official REST API, needs a free app ID | Implemented, off by default, **unverified against the live API** |
 | Chuffed | Chuffed's private GraphQL API with the token they issued; 20 campaigns per request, paced under their 10 requests a minute | Implemented, off by default, response shape checked against the live API |
+| Steunactie | Page scrape of the visible "€ X van € Y opgehaald" text, in euros | Implemented, off by default, **markup is synthetic (built from the page text): dry-run before enabling** |
 | LaunchGood | Page scrape | Not started: needs a fixture |
 | GiveSendGo | Page scrape or JSON endpoint | Not started: needs a fixture |
 | Whydonate | Page scrape | Not started: needs a fixture |

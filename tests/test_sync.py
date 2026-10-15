@@ -26,6 +26,7 @@ from bfep_sync.providers.gogetfunding import GoGetFunding, parse_gogetfunding  #
 from bfep_sync.providers.justgiving import JustGiving, parse_justgiving  # noqa: E402
 from bfep_sync.providers.paypal import PayPal, parse_paypal  # noqa: E402
 from bfep_sync.providers.spotfund import Spotfund, parse_spotfund  # noqa: E402
+from bfep_sync.providers.steunactie import Steunactie, parse_steunactie  # noqa: E402
 from bfep_sync.runner import Row, check, run, shown_status  # noqa: E402
 
 FIXTURES = ROOT / 'tests' / 'fixtures'
@@ -601,6 +602,46 @@ class ChuffedTest(unittest.TestCase):
     def test_registered_but_not_default(self):
         self.assertEqual([p.name for p in registry.enabled('chuffed')], ['chuffed'])
         self.assertNotIn('chuffed', registry.DEFAULT)
+
+
+def steun_page(raised='3.721', goal='30.000', count='135', link_raised=None):
+    # Shaped like the text of fundraiser 1830's page (2026-10-15); markup synthetic.
+    link_raised = link_raised or raised
+    return (f'<div class="progress"><strong>€ {raised}</strong> van € {goal} opgehaald</div>'
+            f'<div><strong>12%</strong>van het doel</div><div><strong>{count}</strong>donaties</div>'
+            f'<a href="#donations" title="Donaties"><strong>€ {link_raised}</strong> van € {goal} '
+            f'<strong>{count}</strong> donaties 12%</a><h5>{count} donaties</h5>'
+            f'<a>Bekijk alle {count} donaties</a>')
+
+
+class SteunactieTest(unittest.TestCase):
+
+    def test_reads_dutch_amounts(self):
+        self.assertEqual(parse_steunactie(steun_page()), Figures(Decimal('3721'), Decimal('30000'), 'EUR', 135))
+        self.assertEqual(parse_steunactie(steun_page(raised='1.234,56', goal='2.000.000', count='1.204')),
+                         Figures(Decimal('1234.56'), Decimal('2000000'), 'EUR', 1204))
+
+    def test_raised_without_goal(self):
+        page = '<p><strong>€ 250</strong> opgehaald</p><p>4 donaties</p>'
+        self.assertEqual(parse_steunactie(page), Figures(Decimal('250'), None, 'EUR', 4))
+
+    def test_rejects_missing_or_conflicting_amounts(self):
+        for page in ('<html>Pagina niet gevonden</html>', steun_page(link_raised='3.900')):
+            with self.subTest(page=page[:40]), self.assertRaises(ParseError):
+                parse_steunactie(page)
+
+    def test_normalize(self):
+        p = Steunactie()
+        self.assertEqual(p.normalize('https://steunactie.be/actie/help-my-family-in-gaza-5/-38978?fbclid=x'),
+                         'https://steunactie.be/actie/help-my-family-in-gaza-5/-38978')
+        self.assertEqual(p.normalize('www.steunactie.be/actie/x/-1'), 'https://steunactie.be/actie/x/-1')
+        for bad in ('https://steunactie.be/', 'https://steunactie.be.evil.org/actie/x', 'Steunactie for Linda'):
+            with self.subTest(url=bad):
+                self.assertIsNone(p.normalize(bad))
+
+    def test_registered_but_not_default(self):
+        self.assertEqual([p.name for p in registry.enabled('steunactie')], ['steunactie'])
+        self.assertNotIn('steunactie', registry.DEFAULT)
 
 
 if __name__ == '__main__':
