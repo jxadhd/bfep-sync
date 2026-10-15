@@ -67,9 +67,12 @@ class PostgresStore:
         self.conn.commit()
 
     def record_problem(self, rid: int, status: str, failures: int) -> None:
+        # A page not found NOT_FOUND_AFTER nights running also turns sync off for
+        # that fundraiser; staff see it under the "page not found" data check.
         self.cur.execute(
             """UPDATE campaign_fundraisers
-               SET last_checked_at = now(), sync_status = %s, consecutive_failures = %s
+               SET last_checked_at = now(), sync_status = %s, consecutive_failures = %s,
+                   auto_sync = auto_sync AND %s <> 'not_found'
                WHERE id = %s""",
-            (status, failures, rid))
+            (status, failures, status, rid))
         self.conn.commit()

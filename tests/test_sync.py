@@ -234,6 +234,13 @@ class RunTest(unittest.TestCase):
         self.run_sync(store, [fixture('gofundme_ok.html'), http_error(404)])
         self.assertEqual(store.written, [(1, 'ok', Decimal('12345.5')), (2, 'not_found', 3), (3, 'invalid_url', 0)])
 
+    def test_says_when_sync_is_turned_off(self):
+        store = FakeStore([row(id=1, consecutive_failures=1), row(id=2, consecutive_failures=2)])
+        _, lines = self.run_sync(store, [http_error(404), http_error(404)], apply=False)
+        self.assertEqual(lines[1:3], ['1: not_found', '2: not_found, sync would be turned off'])
+        _, lines = self.run_sync(store, [http_error(404), http_error(404)])
+        self.assertEqual(lines[2], '2: not_found, sync turned off')
+
     def test_block_stops_the_provider(self):
         store = FakeStore([row(id=1), row(id=2), row(id=3)])
         result, lines = self.run_sync(store, [fixture('gofundme_ok.html'), http_error(429)])

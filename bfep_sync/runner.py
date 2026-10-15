@@ -7,7 +7,7 @@ stated currency is now adopted (see below):
 * invalid URL -> 'invalid_url' (not a failure)
 * HTTP 403/429 -> Blocked: stop calling that platform for the rest of the run
 * HTTP 404/410 -> 'not_found' (a failure; shown as 'not_found_pending' until
-  NOT_FOUND_AFTER consecutive failures)
+  NOT_FOUND_AFTER consecutive failures, when the store also turns auto_sync off)
 * other HTTP status -> 'http_<code>' (not a failure)
 * unparseable page -> 'parse_error' (a failure)
 * other exception -> 'error' (not a failure)
@@ -208,7 +208,10 @@ def run(store, providers: list[Provider], *, apply: bool, limit: int = 0, after:
             if changed:
                 result.changed += 1
         else:
-            out(f'{row.id}: {outcome.status}' + (f' ({outcome.detail})' if outcome.detail else ''))
+            note = f' ({outcome.detail})' if outcome.detail else ''
+            if shown_status(outcome, row.consecutive_failures)[0] == 'not_found':
+                note += ', sync turned off' if apply else ', sync would be turned off'
+            out(f'{row.id}: {outcome.status}{note}')
         if apply:
             if outcome.status == 'ok':
                 store.record_ok(row.id, outcome.figures)
