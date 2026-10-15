@@ -263,3 +263,20 @@ markup in the tests is synthetic, built from the live page's text, so
 dry-run before enabling.
 
 **Drop it:** Delete `providers/steunactie.py`, its registry entry and its tests.
+
+## 25. Typo hints for every bfep command (2026-10-15)
+
+**What:** A mistyped command or option now stops before doing anything and
+suggests the nearest match. `bfep sync --aply` printed "usage: bfep_sync ...
+unrecognized arguments"; it now names `bfep sync` and suggests `--apply`.
+`bfep sync stauts`, `bfep synk`, `bfep sync log 3d` and an unknown
+`--provider` name get the same kind of hint. Options that are really settings
+(`--dry-run`, `--check`, `--minor`, `--no-updb`, `--no-deploy`, or
+`DRY_RUN=1` typed after the command) point to the setting, e.g.
+`CHECK=1 bfep update`. This also fixes two traps: `bfep update --check` (or
+`--help`) used to ignore the option and run a full update, and
+`bfep deploy --dry-run` tried to deploy a branch called "--dry-run". Usage
+mistakes exit 2. `bfep update rollback` with no timestamp lists the latest
+backups.
+
+**Drop it:** Revert this commit.

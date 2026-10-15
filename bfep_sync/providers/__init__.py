@@ -5,6 +5,7 @@ PROVIDERS, give it fixture tests, then list it in SYNC_PROVIDERS to turn it on.
 """
 from __future__ import annotations
 
+import difflib
 import os
 
 from .base import Blocked, Fetcher, Figures, NotConfigured, ParseError, Provider
@@ -40,7 +41,9 @@ def enabled(names: str | None = None) -> list[Provider]:
     wanted = [n.strip().lower() for n in raw.split(',') if n.strip()]
     unknown = [n for n in wanted if n not in PROVIDERS]
     if unknown:
-        raise ValueError(f'unknown provider(s): {", ".join(unknown)}; known: {", ".join(PROVIDERS)}')
+        guesses = [m for n in unknown for m in difflib.get_close_matches(n, PROVIDERS, 1, 0.6)]
+        hint = f' (did you mean {", ".join(guesses)}?)' if guesses else ''
+        raise ValueError(f'unknown provider(s): {", ".join(unknown)}{hint}; known: {", ".join(PROVIDERS)}')
     return [PROVIDERS[n]() for n in dict.fromkeys(wanted)]
 
 

@@ -33,6 +33,14 @@ RSYNC_OPTS=(-rlptD --delete --human-readable --itemize-changes --chmod=go-w
 
 say() { printf '\n==> %s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+# shellcheck source=../lib/cli.sh
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../lib/cli.sh"
+
+# For typo hints. The options are bfep_sync's own (python3 sync.py --help).
+COMMAND_HINTS=()
+for c in status log test deploy rollback help --apply --limit --after --provider --retries --help; do
+  COMMAND_HINTS+=("$c|bfep sync $c")
+done
 
 version() { cat "$1/.deployed" 2>/dev/null || echo "unknown (installed by hand)"; }
 
@@ -61,7 +69,7 @@ run() {
       break
     fi
   done
-  exec "$PY" sync.py "$@"
+  BFEP_SYNC_PROG="bfep sync" exec "$PY" sync.py "$@"
 }
 
 status() {
@@ -77,6 +85,12 @@ status() {
 }
 
 deploy() {
+  case "${1:-}" in
+    -h | --help) show_help; return 0 ;;
+    -*) usage_error sync "unknown option for deploy: '$1'" "--dry-run|DRY_RUN=1 bfep sync deploy" ;;
+    *=*) usage_error sync "settings go before the command, not after it: '$1'" "--dry-run|DRY_RUN=1 bfep sync deploy" ;;
+  esac
+  [[ $# -le 1 ]] || usage_error sync "deploy takes one branch or tag, got: $*"
   local ref="${1:-main}" before after
   exec 9>"$DEPLOY_LOCK"
   flock -n 9 || die "another bfep sync deploy is already running"
@@ -160,10 +174,12 @@ show_log() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --all) since= ;;
-      --since) [ $# -ge 2 ] || die "--since needs a time, e.g. 3d, 12h or 2026-10-01"
+      --since) [ $# -ge 2 ] || usage_error sync "--since needs a time, e.g. 3d, 12h or 2026-10-01"
                since="$2"; shift ;;
       --since=*) since="${1#--since=}" ;;
-      *[!0-9]* | "") die "unknown: bfep sync log $1 (see bfep help sync)" ;;
+      -*) usage_error sync "unknown option for log: '$1'" "--all|bfep sync log --all" "--since|bfep sync log --since 3d" ;;
+      [0-9]*[smhdw]) usage_error sync "not a number of lines: '$1'" "$1|bfep sync log --since $1" ;;
+      *[!0-9]* | "") usage_error sync "not a number of lines: '$1'" ;;
       *) lines="$1" ;;
     esac
     shift
@@ -174,13 +190,17 @@ show_log() {
   journalctl -u "$UNIT" -n "$lines" --no-pager -o cat ${since:+--since "$since"}
 }
 
+# status, test and rollback take no arguments.
+no_args() { [[ $# -le 1 ]] || usage_error sync "$1 takes no arguments, got: ${*:2}"; }
+
 case "${1:-}" in
-  status) status ;;
+  status) no_args "$@"; status ;;
   log) shift; show_log "$@" ;;
-  test) cd "$LIVE" && exec "$PY" -m unittest discover -s tests ;;
+  test) no_args "$@"; cd "$LIVE" && exec "$PY" -m unittest discover -s tests ;;
   deploy) shift; deploy "$@" ;;
-  rollback) rollback ;;
-  -h | --help | help) sed -n '2,/^[^#]/{/^#/s/^# \{0,1\}//p}' "$0" ;;
+  rollback) no_args "$@"; rollback ;;
+  -h | --help | help) show_help ;;
   -* | "") run "$@" ;;
-  *) die "unknown: bfep sync $1 (see bfep help sync)" ;;
+  *=*) usage_error sync "settings go before the command, not after it: '$1'" "--dry-run|DRY_RUN=1 bfep sync deploy" ;;
+  *) usage_error sync "unknown command '$1'" "${COMMAND_HINTS[@]}" ;;
 esac
