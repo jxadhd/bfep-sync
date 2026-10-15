@@ -15,7 +15,8 @@ stated currency is now adopted (see below):
   dollar currency, otherwise 'currency_unknown' (GoGetFunding only)
 * the page states a currency that differs from the stored one (or there is
   none stored) -> the page's currency is adopted, and the drop check below is
-  skipped because the old and new amounts are in different currencies.
+  skipped because the old and new amounts are in different currencies
+  (a fall to 0 is still held as 'suspicious_drop').
   With SYNC_HOLD_CURRENCY=1 the original rules apply instead: no stored
   currency but a stored raised amount -> 'currency_unknown'; a different
   currency with a different goal -> 'currency_mismatch' (the same goal under
@@ -138,6 +139,10 @@ def check(provider: Provider, row: Row, fetch: Fetcher, retries: int = 0,
             if goal is None or fig.goal != goal:
                 return Outcome('currency_mismatch', None, False)
     elif fig.currency != code:
+        # Amounts in different currencies can't be compared, but a fall to
+        # nothing is suspicious in any currency.
+        if raised and raised > 0 and fig.raised == 0:
+            return Outcome('suspicious_drop', None, False)
         return Outcome('ok', fig, False)    # adopted; the run prints a CURRENCY line
     if raised and raised > 0 and fig.raised < raised * (1 - DROP_LIMIT):
         return Outcome('suspicious_drop', None, False)

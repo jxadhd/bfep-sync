@@ -153,6 +153,15 @@ class CheckRulesTest(unittest.TestCase):
         self.assertEqual((o.status, o.figures.currency, o.figures.goal), ('ok', 'USD', Decimal('50000')))
         self.assertEqual(self.outcome(row(currency_code='', raised=Decimal('100')), self.ok).status, 'ok')
 
+    def test_fall_to_zero_held_even_with_new_currency(self):
+        # Seen on Chuffed 2144 (2026-10-15): GBP 743 -> USD 0.
+        zero = Figures(Decimal('0'), Decimal('15000'), 'USD', 0)
+        p = mock.Mock(normalize=lambda u: u, fetch_figures=lambda u, f: zero)
+        o = check(p, row(currency_code='GBP', raised=Decimal('743')), FakeFetch())
+        self.assertEqual(o.status, 'suspicious_drop')
+        o = check(p, row(currency_code='GBP', raised=Decimal('0')), FakeFetch())
+        self.assertEqual(o.status, 'ok')
+
     @mock.patch.dict('os.environ', {'SYNC_HOLD_CURRENCY': '1'})
     def test_currency_unknown(self):
         self.assertEqual(self.outcome(row(currency_code=''), self.ok).status, 'currency_unknown')

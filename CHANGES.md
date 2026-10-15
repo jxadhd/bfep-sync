@@ -252,3 +252,12 @@ that is refused, the run prints `<id>: could not turn sync off (...)` and
 carries on.
 
 **Drop it:** Revert this commit (and make sure the grant is in place).
+
+## 24. A fall to 0 is held even when the currency changes (2026-10-15)
+
+**What:** When a platform states a new currency, the drop check is skipped
+because the old and new amounts can't be compared. That let Chuffed 2144 go
+from GBP 743 to USD 0. A stored raised amount above 0 that comes back as 0 is
+now held as `suspicious_drop` in any currency.
+
+**Drop it:** Revert this commit.
