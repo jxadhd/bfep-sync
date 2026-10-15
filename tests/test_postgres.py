@@ -221,9 +221,20 @@ class SyncAgainstPostgresTest(PostgresTestCase):
         self.assertFalse(t[5][6], 'a held row must not get last_success_at')
 
     def test_not_found_becomes_final_after_three_runs(self):
+        before = self.auto_sync()
         for _ in range(3):
-            self.run_new('--apply')
+            code, out, err = self.run_new('--apply')
         self.assertEqual(self.table()[6][3:5], ('not_found', 3))
+        self.assertIn('6: not_found, sync turned off', out)
+        self.assertEqual(self.auto_sync(), {**before, 6: False})
+
+    def auto_sync(self):
+        conn = self.connect()
+        with conn.cursor() as cur:
+            cur.execute('SELECT id, auto_sync FROM campaign_fundraisers ORDER BY id')
+            rows = dict(cur.fetchall())
+        conn.close()
+        return rows
 
     def test_limit_takes_least_recently_checked_first(self):
         self.run_new('--apply', '--limit', '3')
@@ -319,8 +330,10 @@ class ParityWithOriginalTest(PostgresTestCase):
             with mock.patch.dict(os.environ, {'PGDATABASE': copy}):
                 old_code, old_out = self.run_original(*argv)
             self.assertEqual(new_code, old_code)
-            # The new lines add a reason to parse_error and error, e.g. "7: parse_error (no ...)".
+            # The new lines add a reason to parse_error and error, e.g. "7: parse_error (no ...)",
+            # and say when a dead link's sync is turned off (the original kept checking it).
             new_lines = [re.sub(r'^(\d+: (?:parse_)?error) \(.*\)$', r'\1', line) for line in new_out.splitlines()]
+            new_lines = [re.sub(r'^(\d+: not_found), sync turned off$', r'\1', line) for line in new_lines]
             self.assertEqual(new_lines, old_out.splitlines())
         new_rows = self.table()
         self.dbname, orig = copy, self.dbname

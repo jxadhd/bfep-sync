@@ -141,7 +141,9 @@ All of these are covered by tests in `CheckRulesTest`:
   currency, and gives `currency_unknown` otherwise. Set `SYNC_HOLD_CURRENCY=1`
   to go back to the original rule (hold as `currency_mismatch` unless the goal
   matches, and `currency_unknown` when none is stored).
-- 404 or 410 gives `not_found_pending` until 3 consecutive failures, then `not_found`.
+- 404 or 410 gives `not_found_pending` until 3 consecutive failures, then `not_found`,
+  which also turns `auto_sync` off for that fundraiser (ticking it again on the
+  site gives it another 3 tries).
   A parse error also counts as a failure.
 - 403 or 429 stops calling that platform for the rest of the run, with exit code 2.
 - The same UPDATE statements, the same columns and the same dry-run output lines.

@@ -229,3 +229,15 @@ null with an "Invalid query" error now counts as not found, like a batch.
 
 **Drop it:** Revert this commit; Chuffed goes back to one request per
 campaign and name-only links go back to `invalid_url`.
+
+## 22. Dead links stop syncing (2026-10-15)
+
+**What:** When a fundraiser's page is not found on 3 runs in a row (status
+`not_found`), the sync also sets its `auto_sync` to false, so it stops
+asking the platform every night. The run prints
+`<id>: not_found, sync turned off` (or `would be turned off` in a dry run).
+The website's "Fundraiser page not found" data check lists these rows, and
+staff can tick automatic updates again on the campaign's edit page.
+`grants.sql` now lets the `bfep_sync` role update `auto_sync`.
+
+**Drop it:** Revert this commit; dead links keep being checked every night.
