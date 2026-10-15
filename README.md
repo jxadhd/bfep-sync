@@ -71,7 +71,7 @@ a script in `commands/`:
 | Command | What it does |
 |---|---|
 | `bfep deploy [branch]` | Deploys the website's custom modules and themes (the former `bfep-deploy`). |
-| `bfep update` | Updates Drupal core and contrib by rebuilding the image, with backup and rollback (the former `bfep-update`). First moves the Dockerfile's `FROM drupal:<version>-<variant>` line to the newest patch image of that minor series (`MINOR=1` allows the next minor, never a new major; `IMAGE_BUMP=0` skips it). |
+| `bfep update` | Updates Drupal core and contrib by rebuilding the image, with backup and rollback (the former `bfep-update`). First moves the Dockerfile's `FROM drupal:<version>-<variant>` line to the newest patch image of that minor series (`MINOR=1` allows the next minor, never a new major; `IMAGE_BUMP=0` skips it), and prints upgrade steps when a newer minor or major is out. Runs `bfep deploy` first (`NO_DEPLOY=1` skips it). |
 | `bfep sync [--apply] [--limit N]` | Runs the sync now with the settings in `/etc/bfep-sync.env`. A dry run unless `--apply`. |
 | `bfep sync status` | The deployed version, the timer and the last run. |
 | `bfep sync log [N]` | The last N lines (default 50) of the sync's log from the last 24 hours. Add `--since 3d` (or `12h`, `2026-10-01`) for a longer window, or `--all` for the whole log, which can take a while to search. |

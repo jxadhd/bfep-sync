@@ -5,6 +5,7 @@
 #         CHECK=1 bfep update               report only; changes nothing
 #         MINOR=1 bfep update               also allow a new minor release (11.4 -> 11.5)
 #         IMAGE_BUMP=0 bfep update          rebuild without changing the base image
+#         NO_DEPLOY=1 bfep update           skip the "bfep deploy" step
 #         bfep update rollback <timestamp>  restore previous image + database
 #
 # Before rebuilding, the FROM line of the service's Dockerfile is moved to the
@@ -13,6 +14,10 @@
 # picked. The old Dockerfile is kept with the backup and put back on rollback.
 # When a newer minor or major release is out, preflight prints a notice with
 # the steps to move to it (and, for a major, which modules are ready).
+#
+# It starts with "bfep deploy" (pull the site repo, sync custom modules and
+# themes, updb, cache clear), so the custom code is current before the core
+# update. With CHECK=1 that step is a dry run.
 #
 # Custom modules/themes are bind-mounted and are not touched (use bfep deploy).
 # This is the former /usr/local/bin/bfep-update, plus the base image update
@@ -31,6 +36,7 @@ PG_DUMP_IMAGE="${PG_DUMP_IMAGE:-postgres:18-alpine}"  # used when the container 
 KEEP="${KEEP:-5}"
 IMAGE_BUMP="${IMAGE_BUMP:-1}"       # 0 = keep the Dockerfile's base image as it is
 MINOR="${MINOR:-0}"                 # 1 = allow a new minor release, not only patches
+NO_DEPLOY="${NO_DEPLOY:-0}"          # 1 = don't run "bfep deploy" first
 BFEP_DIR="${BFEP_ROOT:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/..}"
 LIB="$BFEP_DIR/lib"
 
@@ -83,6 +89,12 @@ rollback() {
 
 docker inspect "$CONTAINER" >/dev/null 2>&1 || die "container '$CONTAINER' not found"
 mkdir -p "$BACKUP_ROOT"
+
+if [[ "$NO_DEPLOY" != "1" ]]; then
+  say "Deploying the site repo first (bfep deploy)"
+  DRY_RUN="$CHECK" "$BFEP_DIR/commands/deploy" \
+    || die "bfep deploy failed, so nothing was updated. Fix it, or run with NO_DEPLOY=1"
+fi
 
 say "Preflight"
 df -Pm "$BACKUP_ROOT" /var/lib/docker 2>/dev/null | awk 'NR>1 && $4 < 3000 {print "WARNING: only " $4 " MB free on " $6}'
