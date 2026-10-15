@@ -42,6 +42,32 @@ LIB="$BFEP_DIR/lib"
 
 say() { printf '\n==> %s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+# shellcheck source=../lib/cli.sh
+. "$LIB/cli.sh"
+
+# Options people try, and the setting that does it. Anything unexpected stops
+# here, before a backup or rebuild starts.
+SETTINGS=("--check|CHECK=1 bfep update" "--minor|MINOR=1 bfep update"
+  "--no-image-bump|IMAGE_BUMP=0 bfep update" "--no-deploy|NO_DEPLOY=1 bfep update"
+  "--files-backup|FILES_BACKUP=1 bfep update" "rollback|bfep update rollback <timestamp>"
+  "--help|bfep help update")
+case "${1:-}" in
+  "") ;;
+  -h | --help | help) show_help; exit 0 ;;
+  rollback)
+    [[ $# -le 2 ]] || usage_error update "rollback takes one timestamp, got: ${*:2}"
+    if [[ -z "${2:-}" ]]; then
+      # shellcheck disable=SC2010  # backup folder names are timestamps we created
+      backups="$(ls -1t "$BACKUP_ROOT" 2>/dev/null | grep -E '^[0-9]{8}-[0-9]{6}$' | head -5 | tr '\n' ' ' || true)"
+      echo "Usage: bfep update rollback <timestamp>" >&2
+      echo "Latest backups: ${backups:-none in $BACKUP_ROOT}" >&2
+      exit 2
+    fi
+    ;;
+  -*) usage_error update "unknown option '$1'" "${SETTINGS[@]}" ;;
+  *=*) usage_error update "settings go before the command, not after it: '$1'" "${SETTINGS[@]}" ;;
+  *) usage_error update "unknown command '$1'" "${SETTINGS[@]}" ;;
+esac
 
 DC="docker compose"
 cd "$APP_DIR" || die "cannot cd to $APP_DIR"
@@ -59,7 +85,7 @@ wait_ready() {
 }
 
 rollback() {
-  local ts="${1:?usage: bfep update rollback <timestamp>}" b
+  local ts="$1" b
   b="$BACKUP_ROOT/$ts"
   [[ -f "$b/image-name" ]] || die "no complete backup at $b"
   read -r -p "Restore the previous image from $ts (database only if an automatic dump exists)? [y/N] " a

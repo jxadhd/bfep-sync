@@ -109,6 +109,48 @@ class BfepCommandTest(unittest.TestCase):
         self.assertEqual(self.bfep('../bin/bfep').returncode, 2)
         self.assertEqual(self.bfep('help', '../x').returncode, 2)
 
+    def test_typos_get_a_hint_and_change_nothing(self):
+        # Each of these used to run something, fail late, or print a bare error.
+        cases = {
+            ('synk',): 'Did you mean: bfep sync',
+            ('help', 'updte'): 'Did you mean: bfep help update',
+            ('sync', 'stauts'): 'Did you mean: bfep sync status',
+            ('sync', 'apply'): 'Did you mean: bfep sync --apply',
+            ('sync', 'log', '3d'): 'Did you mean: bfep sync log --since 3d',
+            ('sync', 'log', '--sinse', '3d'): 'Did you mean: bfep sync log --since',
+            ('sync', 'deploy', '--dry-run'): 'Did you mean: DRY_RUN=1 bfep sync deploy',
+            ('sync', 'deploy', 'DRY_RUN=1'): 'Did you mean: DRY_RUN=1 bfep sync deploy',
+            ('sync', 'rollback', 'now'): 'rollback takes no arguments',
+            ('deploy', '--dryrun'): 'Did you mean: DRY_RUN=1 bfep deploy',
+            ('deploy', 'NO_UPDB=1'): 'Did you mean: NO_UPDB=1 bfep deploy',
+            ('deploy', 'a', 'b'): 'takes one branch',
+            ('update', '--check'): 'Did you mean: CHECK=1 bfep update',
+            ('update', 'check'): 'Did you mean: CHECK=1 bfep update',
+            ('update', '--no-deploy'): 'Did you mean: NO_DEPLOY=1 bfep update',
+            ('update', 'rollback'): 'Latest backups: none in',
+        }
+        env = {'APP_DIR': str(self.tmp / 'no-app'), 'BACKUP_ROOT': str(self.tmp / 'no-backups')}
+        for args, hint in cases.items():
+            with self.subTest(args=args):
+                r = self.bfep(*args, env=env)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn(hint, r.stderr)
+        self.assertFalse((self.live / '.deployed').exists())
+        for name in ('deploy', 'update'):
+            r = self.bfep(name, '--help', env=env)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn(f'Usage:  bfep {name}', r.stdout)
+
+    def test_sync_options_are_checked_by_name(self):
+        self.bfep('sync', 'deploy')
+        r = self.bfep('sync', '--aply', '--provider', 'steunactie')
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn('usage: bfep sync ', r.stderr)
+        self.assertIn('bfep sync: unknown option --aply (did you mean --apply?)', r.stderr)
+        r = self.bfep('sync', '--provider', 'stuenactie')
+        self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
+        self.assertIn('did you mean steunactie?', r.stderr)
+
     # bfep sync log
 
     def test_log_searches_the_last_day_unless_told_otherwise(self):
@@ -126,8 +168,8 @@ class BfepCommandTest(unittest.TestCase):
             with self.subTest(args=args):
                 r = self.bfep('sync', *args, env=env)
                 self.assertEqual((r.returncode, r.stdout.strip()), (0, expected), r.stderr)
-        self.assertEqual(self.bfep('sync', 'log', '--since', env=env).returncode, 1)
-        self.assertEqual(self.bfep('sync', 'log', 'lots', env=env).returncode, 1)
+        self.assertEqual(self.bfep('sync', 'log', '--since', env=env).returncode, 2)
+        self.assertEqual(self.bfep('sync', 'log', 'lots', env=env).returncode, 2)
 
     # bfep sync deploy / rollback
 

@@ -92,6 +92,12 @@ A command this repo doesn't have yet still works: `bfep foo` runs an existing
 `/usr/local/bin/bfep-foo`. To add a command, put an executable script in
 `commands/` whose second line is `# name: one-line description`.
 
+A mistyped command or option stops before anything runs and suggests the
+nearest match, for example `bfep sync --aply` suggests `--apply` and
+`bfep update --check` suggests `CHECK=1 bfep update` (settings like `DRY_RUN`
+and `CHECK` go before the command, not after it). Such mistakes exit with
+code 2. Commands share these hints through `lib/cli.sh`.
+
 ### Installing it (once)
 
 ```sh

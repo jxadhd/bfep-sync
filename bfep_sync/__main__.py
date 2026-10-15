@@ -8,14 +8,39 @@ in progress, 4 bad configuration, 5 the database could not be reached.
 from __future__ import annotations
 
 import argparse
+import difflib
+import os
 import sys
 
 from . import providers as registry
 from .runner import run
 
 
+class Parser(argparse.ArgumentParser):
+    """Suggests the nearest option for a mistyped one (--aply -> --apply)."""
+
+    def parse_args(self, args=None, namespace=None):
+        args, unknown = self.parse_known_args(args, namespace)
+        if unknown:
+            options = [o for a in self._actions for o in a.option_strings if o.startswith('--')]
+            lines = []
+            for arg in unknown:
+                word = '--' + arg.lstrip('-').split('=')[0]
+                close = difflib.get_close_matches(word, options, 1, 0.6)
+                lines.append(f'unknown option {arg}' + (f' (did you mean {close[0]}?)' if close else ''))
+            self.error('; '.join(lines))
+        return args
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        hint = "\nRun 'bfep help sync' for the options." if self.prog == 'bfep sync' else ''
+        self.exit(2, f'{self.prog}: {message}{hint}\n')
+
+
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog='bfep_sync')
+    # "bfep sync" runs this with BFEP_SYNC_PROG set, so messages name the
+    # command that was typed.
+    ap = Parser(prog=os.environ.get('BFEP_SYNC_PROG') or 'bfep_sync')
     ap.add_argument('--apply', action='store_true', help='write changes (default is a dry run)')
     ap.add_argument('--limit', type=int, default=0, help='check at most N campaigns')
     ap.add_argument('--after', default='', help='command to run after a run that wrote changes')

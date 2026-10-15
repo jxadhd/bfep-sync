@@ -8,6 +8,17 @@
 # This is the former /usr/local/bin/bfep-deploy, unchanged apart from
 # comments. "bfep-deploy" still works after install.sh.
 set -euo pipefail
+# shellcheck source=../lib/cli.sh
+. "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../lib/cli.sh"
+
+# Options people try, and the setting that does it.
+SETTINGS=("--dry-run|DRY_RUN=1 bfep deploy" "--no-updb|NO_UPDB=1 bfep deploy" "--help|bfep help deploy")
+case "${1:-}" in
+  -h | --help | help) show_help; exit 0 ;;
+  -*) usage_error deploy "unknown option '$1'" "${SETTINGS[@]}" ;;
+  *=*) usage_error deploy "settings go before the command, not after it: '$1'" "${SETTINGS[@]}" ;;
+esac
+[[ $# -le 1 ]] || usage_error deploy "takes one branch, got: $*"
 
 BRANCH="${1:-main}"
 REPO="${REPO:-/opt/docker/drupal/repo}"
