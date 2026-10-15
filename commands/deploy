@@ -8,6 +8,9 @@
 # This is the former /usr/local/bin/bfep-deploy, unchanged apart from
 # comments. "bfep-deploy" still works after install.sh.
 set -euo pipefail
+# Files the web server reads must be world-readable. "bfep update" runs this
+# under umask 077, which made newly added module files unreadable (0600).
+umask 022
 # shellcheck source=../lib/cli.sh
 . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../lib/cli.sh"
 
