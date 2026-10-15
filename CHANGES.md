@@ -195,3 +195,20 @@ server; the fixture is synthetic, so dry-run before enabling.
 
 **Drop it:** Delete `providers/paypal.py`, its entry in
 `providers/__init__.py`, `tests/fixtures/paypal_ok.html` and its tests.
+
+## 20. Chuffed provider (2026-10-15, off by default)
+
+**What:** Reads Chuffed campaigns from Chuffed's private GraphQL API
+(`https://chuffed.org/api/graphql`), which Chuffed opened for our server.
+Each request sends the token they issued in an `x-chuffed-token` header,
+read from `CHUFFED_TOKEN` in `/etc/bfep-sync.env`; without it the provider is
+not configured and its rows are skipped. A campaign is looked up by the
+number at the start of its link (`/project/120680-...`); links without one
+are `invalid_url`. Amounts come back in cents (except zero-decimal
+currencies) and the raised and goal currencies must match. A campaign the
+API doesn't know counts as not found, so the usual 3-strikes rule applies.
+Chuffed allows 10 requests a minute: the provider waits at least 6.5 s
+between its own requests, retries included. `http_fetch` can now POST.
+
+**Drop it:** Delete `providers/chuffed.py`, its entry in
+`providers/__init__.py` and its tests.

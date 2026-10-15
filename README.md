@@ -57,6 +57,7 @@ New options and settings:
 | `--provider a,b` or `SYNC_PROVIDERS` | `gofundme` | Which providers run. An unknown name exits with code 4. |
 | `--retries N` | `1` | Retries for network errors and HTTP 5xx on each campaign. `0` restores the original behaviour. |
 | `JUSTGIVING_APP_ID` | unset | Turns on the JustGiving provider (see below). |
+| `CHUFFED_TOKEN` | unset | The token Chuffed issued for its API (sent as `x-chuffed-token`). Needed by the Chuffed provider; keep it only in the env file. |
 
 Exit codes: `0` means ok. `2` means a platform blocked us with 403 or 429; the
 original also used 2 for this. `3` means another `--apply` run holds the lock.
@@ -109,6 +110,7 @@ for `bfep deploy` and `bfep update`, and the originals are copied to
 ```
 bfep_sync/
   providers/base.py       Provider interface, Figures, ParseError, Blocked, NotConfigured
+  providers/chuffed.py    Chuffed via its GraphQL API (needs CHUFFED_TOKEN)
   providers/gofundme.py   GoFundMe: original normalize() and parse_gofundme(), unchanged rules
   providers/gogetfunding.py GoGetFunding page text parser (off until listed)
   providers/justgiving.py JustGiving via its REST API (off until configured)
@@ -166,7 +168,7 @@ All of these are covered by tests in `CheckRulesTest`:
 | Spotfund | Page scrape of the amount-raised section, currency from the story data | Implemented, off by default, fixture saved from a live page |
 | PayPal fundraisers | Page data fields next to the campaign's productId; paypal.me and donate buttons have no totals and are left out | Implemented, off by default, **fixture is synthetic: dry-run before enabling** |
 | JustGiving | Official REST API, needs a free app ID | Implemented, off by default, **unverified against the live API** |
-| Chuffed | Page scrape (Next.js data, like GoFundMe) | Not started: needs a real page saved as a fixture |
+| Chuffed | Chuffed's private GraphQL API with the token they issued, paced under their 10 requests a minute | Implemented, off by default, response shape checked against the live API |
 | LaunchGood | Page scrape | Not started: needs a fixture |
 | GiveSendGo | Page scrape or JSON endpoint | Not started: needs a fixture |
 | Whydonate | Page scrape | Not started: needs a fixture |

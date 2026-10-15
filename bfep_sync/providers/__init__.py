@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 
 from .base import Blocked, Fetcher, Figures, NotConfigured, ParseError, Provider
+from .chuffed import Chuffed
 from .gofundme import GoFundMe
 from .gogetfunding import GoGetFunding
 from .justgiving import JustGiving
@@ -15,6 +16,7 @@ from .paypal import PayPal
 from .spotfund import Spotfund
 
 PROVIDERS: dict[str, type[Provider]] = {
+    'chuffed': Chuffed,
     'gofundme': GoFundMe,
     'gogetfunding': GoGetFunding,
     'justgiving': JustGiving,
@@ -41,5 +43,5 @@ def enabled(names: str | None = None) -> list[Provider]:
 
 
 __all__ = ['Blocked', 'Fetcher', 'Figures', 'NotConfigured', 'ParseError', 'Provider',
-           'PROVIDERS', 'DEFAULT', 'enabled', 'GoFundMe', 'GoGetFunding', 'JustGiving',
+           'PROVIDERS', 'DEFAULT', 'enabled', 'Chuffed', 'GoFundMe', 'GoGetFunding', 'JustGiving',
            'PayPal', 'Spotfund']

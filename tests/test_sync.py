@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT / 'original'))
 
 from bfep_sync import providers as registry  # noqa: E402
 from bfep_sync.providers import Blocked, Figures, ParseError  # noqa: E402
+from bfep_sync.providers.chuffed import Chuffed, parse_chuffed  # noqa: E402
 from bfep_sync.providers.gofundme import GoFundMe, parse_gofundme  # noqa: E402
 from bfep_sync.providers.gogetfunding import GoGetFunding, parse_gogetfunding  # noqa: E402
 from bfep_sync.providers.justgiving import JustGiving, parse_justgiving  # noqa: E402
@@ -45,8 +46,9 @@ class FakeFetch:
         self.responses = list(responses)
         self.urls = []
 
-    def __call__(self, url, headers=None):
+    def __call__(self, url, headers=None, data=None):
         self.urls.append(url)
+        self.headers, self.data = headers, data
         item = self.responses.pop(0)
         if isinstance(item, BaseException):
             raise item
@@ -460,6 +462,73 @@ class PayPalTest(unittest.TestCase):
     def test_registered_but_not_default(self):
         self.assertEqual([p.name for p in registry.enabled('paypal')], ['paypal'])
         self.assertNotIn('paypal', registry.DEFAULT)
+
+
+def chuffed_body(raised='3088065', goal='3500000', currency='USD', goal_currency=None, count=569):
+    return json.dumps({'data': {'campaign': {
+        'id': '019cb7e9-75aa-7d58-b470-cd928fb63d90', 'slug': '120680-a-mothers-plea', 'title': 'A Mother',
+        'status': 'Completed', 'target': {'amount': goal, 'currency': goal_currency or currency},
+        'collected': {'amount': raised, 'currency': currency}, 'donations': {'totalCount': count}}}})
+
+
+class ChuffedTest(unittest.TestCase):
+
+    def test_reads_figures_in_cents(self):
+        # Response shape from fundraiser 120680, fetched from the server on 2026-10-15.
+        self.assertEqual(parse_chuffed(chuffed_body()), Figures(Decimal('30880.65'), Decimal('35000'), 'USD', 569))
+
+    def test_zero_decimal_currency_and_no_goal(self):
+        self.assertEqual(parse_chuffed(chuffed_body(raised='5000', goal='0', currency='JPY')),
+                         Figures(Decimal('5000'), None, 'JPY', 569))
+
+    def test_rejects_bad_responses(self):
+        for body in ('<html>challenge</html>', '{"errors":[{"message":"Invalid query"}]}',
+                     chuffed_body(goal_currency='AUD'), chuffed_body(raised='lots'),
+                     chuffed_body(raised='NaN'), '{"data":{"campaign":{"collected":null}}}'):
+            with self.subTest(body=body), self.assertRaises(ParseError):
+                parse_chuffed(body)
+
+    def test_unknown_campaign_counts_as_not_found(self):
+        p = Chuffed(token='t', sleep=lambda s: None)
+        o = check(p, row(url='https://chuffed.org/project/1-x'), FakeFetch('{"data":{"campaign":null}}'))
+        self.assertEqual((o.status, o.failed), ('not_found', True))
+
+    def test_posts_query_with_token(self):
+        p, fetch = Chuffed(token=' secret ', sleep=lambda s: None), FakeFetch(chuffed_body())
+        r = row(url='https://chuffed.org/project/120680-a-mothers-plea?fbclid=x', goal=Decimal('35000'),
+                raised=Decimal('30000'))
+        o = check(p, r, fetch)
+        self.assertEqual((o.status, o.figures.raised), ('ok', Decimal('30880.65')))
+        self.assertEqual(fetch.urls, ['https://chuffed.org/api/graphql'])
+        self.assertEqual(fetch.headers['x-chuffed-token'], 'secret')
+        self.assertIn('campaign(id: \\"120680\\")', fetch.data.decode())
+
+    def test_not_configured_without_token(self):
+        o = check(Chuffed(token=''), row(url='https://chuffed.org/project/120680'), FakeFetch())
+        self.assertEqual(o.status, 'not_configured')
+
+    def test_keeps_under_ten_requests_a_minute(self):
+        now, waits = [100.0], []
+        p = Chuffed(token='t', clock=lambda: now[0], sleep=lambda s: (waits.append(s), now.__setitem__(0, now[0] + s)))
+        fetch = FakeFetch(chuffed_body(), chuffed_body())
+        p.fetch_figures('https://chuffed.org/project/1', fetch)
+        now[0] += 2.0   # a retry 2 s later
+        p.fetch_figures('https://chuffed.org/project/1', fetch)
+        self.assertEqual(waits, [4.5])
+        self.assertLess(60 / p.delay, 10)
+
+    def test_normalize(self):
+        p = Chuffed(token='t')
+        self.assertEqual(p.normalize('https://chuffed.org/project/146063?fbclid=PAZ'), 'https://chuffed.org/project/146063')
+        self.assertEqual(p.normalize('www.chuffed.org/project/120680-a-mothers-plea/'), 'https://chuffed.org/project/120680')
+        for bad in ('https://chuffed.org/project/aid-for-yazan', 'https://chuffed.org/', 'https://chuffed.org.evil.org/project/1',
+                    'Chuffed campaign for Amira'):
+            with self.subTest(url=bad):
+                self.assertIsNone(p.normalize(bad))
+
+    def test_registered_but_not_default(self):
+        self.assertEqual([p.name for p in registry.enabled('chuffed')], ['chuffed'])
+        self.assertNotIn('chuffed', registry.DEFAULT)
 
 
 if __name__ == '__main__':

@@ -14,7 +14,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Callable
 
-# fetch(url, headers=None) -> response body as text. Raises
+# fetch(url, headers=None, data=None) -> response body as text; with data
+# (bytes) it POSTs. Raises
 # urllib.error.HTTPError on HTTP errors and any other exception on network
 # failure. Injected so tests never touch the network.
 Fetcher = Callable[..., str]
