@@ -228,6 +228,19 @@ class SyncAgainstPostgresTest(PostgresTestCase):
         self.assertIn('6: not_found, sync turned off', out)
         self.assertEqual(self.auto_sync(), {**before, 6: False})
 
+    def test_missing_auto_sync_grant_only_warns(self):
+        conn = self.connect()
+        with conn.cursor() as cur:
+            cur.execute('REVOKE UPDATE (auto_sync) ON campaign_fundraisers FROM bfep_sync')
+        conn.commit()
+        conn.close()
+        for _ in range(3):
+            code, out, err = self.run_new('--apply')
+            self.assertEqual(code, 0, err)
+        self.assertEqual(self.table()[6][3:5], ('not_found', 3))
+        self.assertIn('6: could not turn sync off', out)
+        self.assertTrue(self.auto_sync()[6])
+
     def auto_sync(self):
         conn = self.connect()
         with conn.cursor() as cur:

@@ -241,3 +241,14 @@ staff can tick automatic updates again on the campaign's edit page.
 `grants.sql` now lets the `bfep_sync` role update `auto_sync`.
 
 **Drop it:** Revert this commit; dead links keep being checked every night.
+
+## 23. A missing auto_sync grant no longer stops the run (2026-10-15)
+
+**What:** Item 22 put `auto_sync` in the same UPDATE as every problem
+status, so a database user without UPDATE on `auto_sync` failed on the first
+problem row and the run stopped (seen on prod). The status is now saved
+first, and only a `not_found` row tries a second UPDATE to turn sync off. If
+that is refused, the run prints `<id>: could not turn sync off (...)` and
+carries on.
+
+**Drop it:** Revert this commit (and make sure the grant is in place).
