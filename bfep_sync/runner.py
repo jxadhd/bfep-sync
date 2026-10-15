@@ -47,8 +47,9 @@ TRANSIENT_HTTP = {500, 502, 503, 504}
 DOLLAR_CODES = {'USD', 'AUD', 'NZD', 'CAD', 'HKD', 'SGD'}
 
 
-def http_fetch(url: str, headers: dict | None = None) -> str:
-    req = urllib.request.Request(url, headers={'User-Agent': UA, **(headers or {})})
+def http_fetch(url: str, headers: dict | None = None, data: bytes | None = None) -> str:
+    """GETs `url`, or POSTs `data` to it when given (for JSON APIs)."""
+    req = urllib.request.Request(url, data=data, headers={'User-Agent': UA, **(headers or {})})
     with urllib.request.urlopen(req, timeout=20) as r:
         return r.read().decode('utf-8', 'replace')
 
