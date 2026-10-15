@@ -200,7 +200,15 @@ drush state:set system.maintenance_mode 0 --input-format=integer
 
 say "Verifying"
 comp show --direct --no-ansi > "$B/packages-after.txt" 2>/dev/null || true
-diff -u "$B/packages-before.txt" "$B/packages-after.txt" | grep -E '^[+-][^+-]' || echo "(no package version changes)"
+# Compare name and version only: composer pads its columns to the longest
+# version, so a whole-line diff marks every package as changed.
+changes="(could not list packages before and after)"
+[[ -s "$B/packages-before.txt" && -s "$B/packages-after.txt" ]] && changes="$(awk 'NR == FNR { b[$1] = $2; next } { a[$1] = $2 }
+  END {
+    for (p in a) if (!(p in b)) print "  " p " " a[p] " (new)"; else if (b[p] != a[p]) print "  " p " " b[p] " -> " a[p]
+    for (p in b) if (!(p in a)) print "  " p " " b[p] " (removed)"
+  }' "$B/packages-before.txt" "$B/packages-after.txt" | sort)"
+echo "${changes:-(no package version changes)}"
 code="$(curl -s -o /dev/null -w '%{http_code}' -L "$SITE_URL" || true)"
 echo "Site returned HTTP $code"
 [[ "$code" == "200" ]] || echo "WARNING: expected 200 from $SITE_URL"
