@@ -29,7 +29,7 @@ APP_DIR="${APP_DIR:-/opt/docker/drupal}"
 SERVICE="${SERVICE:-drupal}"
 CONTAINER="${CONTAINER:-drupal}"
 BACKUP_ROOT="${BACKUP_ROOT:-/opt/backups/drupal}"
-SITE_URL="${SITE_URL:-https://butterfly.joshcross.co.nz/}"
+SITE_URL="${SITE_URL:-https://bfep.org/}"
 CHECK="${CHECK:-0}"
 FILES_BACKUP="${FILES_BACKUP:-0}"   # 1 = also tar sites/default/files
 PG_DUMP_IMAGE="${PG_DUMP_IMAGE:-postgres:18-alpine}"  # used when the container has no pg_dump

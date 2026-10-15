@@ -39,7 +39,7 @@ from typing import Callable, Iterable
 
 from .providers import Blocked, Fetcher, Figures, NotConfigured, ParseError, Provider
 
-UA = 'TBEPSync/1.0 (+https://butterfly.joshcross.co.nz)'
+UA = 'TBEPSync/1.0 (+https://bfep.org)'
 NOT_FOUND_AFTER = 3            # consecutive failures before status 'not_found'
 DROP_LIMIT = Decimal('0.20')   # hold the update if raised falls by more than this
 TRANSIENT_HTTP = {500, 502, 503, 504}
