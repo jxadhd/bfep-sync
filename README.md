@@ -170,7 +170,7 @@ All of these are covered by tests in `CheckRulesTest`:
 | Spotfund | Page scrape of the amount-raised section, currency from the story data | Implemented, off by default, fixture saved from a live page |
 | PayPal fundraisers | Page data fields next to the campaign's productId; paypal.me and donate buttons have no totals and are left out | Implemented, off by default, **fixture is synthetic: dry-run before enabling** |
 | JustGiving | Official REST API, needs a free app ID | Implemented, off by default, **unverified against the live API** |
-| Chuffed | Chuffed's private GraphQL API with the token they issued, paced under their 10 requests a minute | Implemented, off by default, response shape checked against the live API |
+| Chuffed | Chuffed's private GraphQL API with the token they issued; 20 campaigns per request, paced under their 10 requests a minute | Implemented, off by default, response shape checked against the live API |
 | LaunchGood | Page scrape | Not started: needs a fixture |
 | GiveSendGo | Page scrape or JSON endpoint | Not started: needs a fixture |
 | Whydonate | Page scrape | Not started: needs a fixture |

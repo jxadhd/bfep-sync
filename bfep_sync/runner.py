@@ -185,6 +185,13 @@ def run(store, providers: list[Provider], *, apply: bool, limit: int = 0, after:
             out(f'{p.name}: not configured, skipped')
     rows = store.select(active, limit)
     out(('APPLYING' if apply else 'DRY RUN') + f': {len(rows)} campaigns')
+    for p in active:
+        urls = [u for row in rows if provider_for(row.url, active) is p and (u := p.normalize(row.url))]
+        if urls:
+            try:
+                p.prefetch(urls, fetch)
+            except Exception as e:
+                out(f'{p.name}: batch fetch failed ({type(e).__name__}: {e}), fetching one at a time')
 
     blocked: set[str] = set()
     for row in rows:
@@ -217,7 +224,8 @@ def run(store, providers: list[Provider], *, apply: bool, limit: int = 0, after:
                 store.record_ok(row.id, outcome.figures)
             else:
                 store.record_problem(row.id, *shown_status(outcome, row.consecutive_failures))
-        if provider.normalize(row.url) is not None:
+        # A provider with delay 0 paces its own requests (see Chuffed).
+        if provider.delay and provider.normalize(row.url) is not None:
             sleep(provider.delay + jitter() * 2)
 
     out(f'{dict(result.counts)} | changed: {result.changed}')

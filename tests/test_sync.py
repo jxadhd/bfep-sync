@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT / 'original'))
 
 from bfep_sync import providers as registry  # noqa: E402
 from bfep_sync.providers import Blocked, Figures, ParseError  # noqa: E402
-from bfep_sync.providers.chuffed import Chuffed, parse_chuffed  # noqa: E402
+from bfep_sync.providers.chuffed import MIN_INTERVAL, Chuffed, parse_chuffed  # noqa: E402
 from bfep_sync.providers.gofundme import GoFundMe, parse_gofundme  # noqa: E402
 from bfep_sync.providers.gogetfunding import GoGetFunding, parse_gogetfunding  # noqa: E402
 from bfep_sync.providers.justgiving import JustGiving, parse_justgiving  # noqa: E402
@@ -500,6 +500,70 @@ class ChuffedTest(unittest.TestCase):
         o = check(p, row(url='https://chuffed.org/project/1-x'), FakeFetch('{"data":{"campaign":null}}'))
         self.assertEqual((o.status, o.failed), ('not_found', True))
 
+    def test_unknown_campaign_with_error_counts_as_not_found(self):
+        # What Chuffed sends for a number it doesn't know (fundraiser 825, 2026-10-15).
+        body = '{"errors":[{"message":"Invalid query"}],"data":{"campaign":null}}'
+        o = check(Chuffed(token='t', sleep=lambda s: None), row(url='https://chuffed.org/project/156665-x'), FakeFetch(body))
+        self.assertEqual((o.status, o.failed), ('not_found', True))
+
+    def batch_body(self, **nodes):
+        return json.dumps({'data': {k: (json.loads(v)['data']['campaign'] if v else None) for k, v in nodes.items()}})
+
+    def test_prefetch_asks_for_many_campaigns_in_one_request(self):
+        p = Chuffed(token='t', sleep=lambda s: None)
+        fetch = FakeFetch(self.batch_body(c0=chuffed_body(), c1=chuffed_body(raised='100', goal='0'), c2=None))
+        urls = ['https://chuffed.org/project/120680', 'https://chuffed.org/project/aid-for-yazan',
+                'https://chuffed.org/project/120680', 'https://chuffed.org/project/156665']
+        p.prefetch(urls, fetch)
+        query = json.loads(fetch.data)['query']
+        self.assertIn('c0: campaign(id: "120680")', query)
+        self.assertIn('c1: campaign(id: "aid-for-yazan")', query)
+        self.assertIn('c2: campaign(id: "156665")', query)
+        self.assertNotIn('c3', query)
+        self.assertEqual(p.fetch_figures(urls[0], fetch).raised, Decimal('30880.65'))
+        self.assertEqual(p.fetch_figures(urls[1], fetch), Figures(Decimal('1'), None, 'USD', 569))
+        with self.assertRaises(urllib.error.HTTPError) as e:
+            p.fetch_figures(urls[3], fetch)
+        self.assertEqual(e.exception.code, 404)
+        self.assertEqual(len(fetch.urls), 1)
+
+    def test_prefetch_splits_into_batches_and_paces_them(self):
+        waits = []
+        now = [0.0]
+        p = Chuffed(token='t', clock=lambda: now[0], sleep=lambda s: (waits.append(s), now.__setitem__(0, now[0] + s)))
+        urls = [f'https://chuffed.org/project/{n}' for n in range(45)]
+        fetch = FakeFetch(*[self.batch_body() for _ in range(3)])
+        p.prefetch(urls, fetch)
+        self.assertEqual(len(fetch.urls), 3)
+        self.assertEqual(waits, [MIN_INTERVAL, MIN_INTERVAL])
+
+    def test_rejected_batch_falls_back_to_single_requests(self):
+        p = Chuffed(token='t', sleep=lambda s: None)
+        fetch = FakeFetch('{"errors":[{"message":"Invalid query"}],"data":{"c0":null,"c1":null}}', chuffed_body())
+        p.prefetch(['https://chuffed.org/project/1', 'https://chuffed.org/project/2'], fetch)
+        self.assertEqual(p.fetch_figures('https://chuffed.org/project/1', fetch).raised, Decimal('30880.65'))
+        self.assertIn('campaign(id: \\"1\\")', fetch.data.decode())
+
+    def test_run_uses_batch_without_runner_waits(self):
+        sleeps, lines = [], []
+        rows = [row(id=1, url='https://chuffed.org/project/120680-a', goal=Decimal('35000'), raised=Decimal('30000')),
+                row(id=2, url='https://chuffed.org/project/aid-for-yazan', goal=Decimal('35000'), raised=Decimal('30000'))]
+        fetch = FakeFetch(self.batch_body(c0=chuffed_body(), c1=chuffed_body()))
+        result = run(FakeStore(rows), [Chuffed(token='t', sleep=lambda s: None)], apply=False, fetch=fetch,
+                     out=lines.append, sleep=sleeps.append, jitter=lambda: 0)
+        self.assertEqual(result.counts['ok'], 2)
+        self.assertEqual(len(fetch.urls), 1)
+        self.assertEqual(sleeps, [])
+
+    def test_run_falls_back_when_batch_fails(self):
+        lines = []
+        rows = [row(id=1, url='https://chuffed.org/project/120680', goal=Decimal('35000'), raised=Decimal('30000'))]
+        fetch = FakeFetch(OSError('timed out'), chuffed_body())
+        result = run(FakeStore(rows), [Chuffed(token='t', sleep=lambda s: None)], apply=False, fetch=fetch,
+                     retries=0, out=lines.append, sleep=lambda s: None, jitter=lambda: 0)
+        self.assertEqual(result.counts['ok'], 1)
+        self.assertIn('chuffed: batch fetch failed (OSError: timed out), fetching one at a time', lines)
+
     def test_posts_query_with_token(self):
         p, fetch = Chuffed(token=' secret ', sleep=lambda s: None), FakeFetch(chuffed_body())
         r = row(url='https://chuffed.org/project/120680-a-mothers-plea?fbclid=x', goal=Decimal('35000'),
@@ -522,13 +586,14 @@ class ChuffedTest(unittest.TestCase):
         now[0] += 2.0   # a retry 2 s later
         p.fetch_figures('https://chuffed.org/project/1', fetch)
         self.assertEqual(waits, [4.5])
-        self.assertLess(60 / p.delay, 10)
+        self.assertLess(60 / MIN_INTERVAL, 10)
 
     def test_normalize(self):
         p = Chuffed(token='t')
         self.assertEqual(p.normalize('https://chuffed.org/project/146063?fbclid=PAZ'), 'https://chuffed.org/project/146063')
         self.assertEqual(p.normalize('www.chuffed.org/project/120680-a-mothers-plea/'), 'https://chuffed.org/project/120680')
-        for bad in ('https://chuffed.org/project/aid-for-yazan', 'https://chuffed.org/', 'https://chuffed.org.evil.org/project/1',
+        self.assertEqual(p.normalize('https://chuffed.org/project/aid-for-yazan/'), 'https://chuffed.org/project/aid-for-yazan')
+        for bad in ('https://chuffed.org/project/', 'https://chuffed.org/', 'https://chuffed.org/project/1/x', 'https://chuffed.org.evil.org/project/1',
                     'Chuffed campaign for Amira'):
             with self.subTest(url=bad):
                 self.assertIsNone(p.normalize(bad))

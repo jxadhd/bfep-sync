@@ -213,6 +213,23 @@ between its own requests, retries included. `http_fetch` can now POST.
 **Drop it:** Delete `providers/chuffed.py`, its entry in
 `providers/__init__.py` and its tests.
 
+## 21. Chuffed in batches, and links without a number (2026-10-15)
+
+**What:** Before the run, the Chuffed provider asks for 20 campaigns per
+request, each under its own alias (`c0: campaign(id: "...")`), so about 205
+campaigns take 11 requests (just over a minute) instead of one request every
+7 s (about 25 minutes). A campaign a batch didn't answer is fetched on its
+own, as before. Every request still waits 6.5 s after the previous one, and
+the runner no longer adds its own wait for Chuffed (its `delay` is 0).
+Providers get an optional `prefetch(urls, fetch)` hook; a failed prefetch
+prints one line and the run falls back to single requests.
+Links with only a name (`/project/aid-for-yazan`) are looked up by that
+name, since Chuffed accepts slugs as ids. A single lookup that comes back
+null with an "Invalid query" error now counts as not found, like a batch.
+
+**Drop it:** Revert this commit; Chuffed goes back to one request per
+campaign and name-only links go back to `invalid_url`.
+
 ## 22. Dead links stop syncing (2026-10-15)
 
 **What:** When a fundraiser's page is not found on 3 runs in a row (status
