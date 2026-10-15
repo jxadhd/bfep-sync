@@ -252,3 +252,14 @@ that is refused, the run prints `<id>: could not turn sync off (...)` and
 carries on.
 
 **Drop it:** Revert this commit (and make sure the grant is in place).
+
+## 24. Steunactie provider (2026-10-15, off by default)
+
+**What:** Reads Belgian Steunactie campaigns (steunactie.be/actie/...) from
+the page text "€ 3.721 van € 30.000 opgehaald" and "135 donaties". Amounts
+use Dutch number format and are in euros; every copy of the amounts on the
+page must agree. Without a goal, "€ X opgehaald" alone is accepted. The
+markup in the tests is synthetic, built from the live page's text, so
+dry-run before enabling.
+
+**Drop it:** Delete `providers/steunactie.py`, its registry entry and its tests.
