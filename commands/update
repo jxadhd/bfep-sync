@@ -3,11 +3,18 @@
 #
 # Usage:  bfep update                       full update
 #         CHECK=1 bfep update               report only; changes nothing
+#         MINOR=1 bfep update               also allow a new minor release (11.4 -> 11.5)
+#         IMAGE_BUMP=0 bfep update          rebuild without changing the base image
 #         bfep update rollback <timestamp>  restore previous image + database
 #
+# Before rebuilding, the FROM line of the service's Dockerfile is moved to the
+# newest drupal image on Docker Hub with the same variant (-php8.5-apache-trixie)
+# in the same minor series, pinned by digest. A new major version is never
+# picked. The old Dockerfile is kept with the backup and put back on rollback.
+#
 # Custom modules/themes are bind-mounted and are not touched (use bfep deploy).
-# This is the former /usr/local/bin/bfep-update, unchanged apart from
-# comments. "bfep-update" still works after install.sh.
+# This is the former /usr/local/bin/bfep-update, plus the base image update
+# above. "bfep-update" still works after install.sh.
 set -euo pipefail
 umask 077
 
@@ -20,6 +27,9 @@ CHECK="${CHECK:-0}"
 FILES_BACKUP="${FILES_BACKUP:-0}"   # 1 = also tar sites/default/files
 PG_DUMP_IMAGE="${PG_DUMP_IMAGE:-postgres:18-alpine}"  # used when the container has no pg_dump
 KEEP="${KEEP:-5}"
+IMAGE_BUMP="${IMAGE_BUMP:-1}"       # 0 = keep the Dockerfile's base image as it is
+MINOR="${MINOR:-0}"                 # 1 = allow a new minor release, not only patches
+LIB="${BFEP_ROOT:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/..}/lib"
 
 say() { printf '\n==> %s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -46,6 +56,10 @@ rollback() {
   read -r -p "Restore the previous image from $ts (database only if an automatic dump exists)? [y/N] " a
   [[ "$a" == "y" ]] || die "aborted"
   docker tag "bfep-drupal-rollback:$ts" "$(cat "$b/image-name")"
+  if [[ -f "$b/Dockerfile" && -s "$b/dockerfile-path" ]]; then
+    cp "$b/Dockerfile" "$(cat "$b/dockerfile-path")"
+    echo "Dockerfile restored to: $(grep -m1 -i '^FROM' "$b/Dockerfile")"
+  fi
   $DC up -d --no-build --force-recreate "$SERVICE"
   wait_ready
   if [[ -f "$b/db.sql.gz" ]] && docker exec "$CONTAINER" which psql >/dev/null 2>&1; then
@@ -81,6 +95,20 @@ else
   MODE=pull
 fi
 echo "Update method: $MODE (service '$SERVICE')"
+
+DOCKERFILE=""
+if [[ "$MODE" == "build" && "$IMAGE_BUMP" == "1" ]]; then
+  bump_flags=()
+  [[ "$MINOR" == "1" ]] && bump_flags+=(--minor)
+  cfg="$(mktemp)"
+  $DC config --format json > "$cfg"
+  DOCKERFILE="$(python3 "$LIB/drupal_image.py" dockerfile "$cfg" "$SERVICE")" \
+    || { rm -f "$cfg"; die "could not find the Dockerfile; run with IMAGE_BUMP=0 to rebuild without changing it"; }
+  rm -f "$cfg"
+  echo "Base image ($DOCKERFILE): $(grep -m1 -i '^FROM' "$DOCKERFILE")"
+  python3 "$LIB/drupal_image.py" bump "$DOCKERFILE" --check "${bump_flags[@]}" \
+    || die "could not check for a newer base image; run with IMAGE_BUMP=0 to rebuild without changing it"
+fi
 [[ "$CHECK" == "1" ]] && { say "Check only; nothing changed"; exit 0; }
 
 TS="$(date +%Y%m%d-%H%M%S)"
@@ -116,10 +144,19 @@ if [[ "$FILES_BACKUP" == "1" ]]; then
 fi
 comp show --direct --no-ansi > "$B/packages-before.txt" 2>/dev/null || true
 docker inspect -f '{{.Config.Image}}' "$CONTAINER" > "$B/image-name"
+if [[ -n "$DOCKERFILE" ]]; then
+  cp "$DOCKERFILE" "$B/Dockerfile"
+  printf '%s\n' "$DOCKERFILE" > "$B/dockerfile-path"
+fi
 docker tag "$(docker inspect -f '{{.Image}}' "$CONTAINER")" "bfep-drupal-rollback:$TS"
 echo "Backup ok: $(du -sh "$B" | cut -f1). Roll back with: bfep-update rollback $TS"
 
 trap 'echo; echo "FAILED at line $LINENO. Site may still be in maintenance mode."; echo "Roll back with: bfep-update rollback '"$TS"'" >&2' ERR
+
+if [[ -n "$DOCKERFILE" ]]; then
+  say "Updating the base image"
+  python3 "$LIB/drupal_image.py" bump "$DOCKERFILE" "${bump_flags[@]}"
+fi
 
 say "Maintenance mode on"
 drush state:set system.maintenance_mode 1 --input-format=integer
