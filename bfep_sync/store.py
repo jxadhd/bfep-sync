@@ -67,12 +67,26 @@ class PostgresStore:
         self.conn.commit()
 
     def record_problem(self, rid: int, status: str, failures: int) -> None:
-        # A page not found NOT_FOUND_AFTER nights running also turns sync off for
-        # that fundraiser; staff see it under the "page not found" data check.
         self.cur.execute(
             """UPDATE campaign_fundraisers
-               SET last_checked_at = now(), sync_status = %s, consecutive_failures = %s,
-                   auto_sync = auto_sync AND %s <> 'not_found'
+               SET last_checked_at = now(), sync_status = %s, consecutive_failures = %s
                WHERE id = %s""",
-            (status, failures, status, rid))
+            (status, failures, rid))
         self.conn.commit()
+        if status == 'not_found':
+            self.turn_off(rid)
+
+    def turn_off(self, rid: int) -> None:
+        """Stops syncing a fundraiser whose page was not found NOT_FOUND_AFTER
+        nights running; staff see it under the "page not found" data check.
+
+        Needs UPDATE on auto_sync (grants.sql). Without it the status is still
+        recorded and the run carries on, with a warning.
+        """
+        import psycopg2
+        try:
+            self.cur.execute('UPDATE campaign_fundraisers SET auto_sync = false WHERE id = %s', (rid,))
+            self.conn.commit()
+        except psycopg2.errors.InsufficientPrivilege:
+            self.conn.rollback()
+            print(f'{rid}: could not turn sync off (the database user needs UPDATE on auto_sync, see deploy/grants.sql)')
