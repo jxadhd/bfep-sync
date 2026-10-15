@@ -59,7 +59,7 @@ wait_ready() {
 }
 
 rollback() {
-  local ts="${1:?usage: bfep-update rollback <timestamp>}" b
+  local ts="${1:?usage: bfep update rollback <timestamp>}" b
   b="$BACKUP_ROOT/$ts"
   [[ -f "$b/image-name" ]] || die "no complete backup at $b"
   read -r -p "Restore the previous image from $ts (database only if an automatic dump exists)? [y/N] " a
@@ -168,9 +168,9 @@ if [[ -n "$DOCKERFILE" ]]; then
   printf '%s\n' "$DOCKERFILE" > "$B/dockerfile-path"
 fi
 docker tag "$(docker inspect -f '{{.Image}}' "$CONTAINER")" "bfep-drupal-rollback:$TS"
-echo "Backup ok: $(du -sh "$B" | cut -f1). Roll back with: bfep-update rollback $TS"
+echo "Backup ok: $(du -sh "$B" | cut -f1). Roll back with: bfep update rollback $TS"
 
-trap 'echo; echo "FAILED at line $LINENO. Site may still be in maintenance mode."; echo "Roll back with: bfep-update rollback '"$TS"'" >&2' ERR
+trap 'echo; echo "FAILED at line $LINENO. Site may still be in maintenance mode."; echo "Roll back with: bfep update rollback '"$TS"'" >&2' ERR
 
 if [[ -n "$DOCKERFILE" ]]; then
   say "Updating the base image"

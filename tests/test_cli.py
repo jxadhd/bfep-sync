@@ -203,6 +203,44 @@ class BfepCommandTest(unittest.TestCase):
         self.assertIn('sync run is in progress', r.stderr)
         self.assertEqual(self.bfep('sync', '--limit', '1').returncode, 5)   # dry runs don't wait
 
+    # bfep update
+
+    def test_update_rollback_restores_image_and_dockerfile(self):
+        app, backups = self.tmp / 'app', self.tmp / 'backups'
+        b = backups / '20261015-083023'
+        b.mkdir(parents=True)
+        app.mkdir()
+        dockerfile = app / 'Dockerfile.drupal'
+        dockerfile.write_text('FROM drupal:11.4.10-php8.5-apache-trixie\n')
+        (b / 'Dockerfile').write_text('FROM drupal:11.4.8-php8.5-apache-trixie\n')
+        (b / 'dockerfile-path').write_text(f'{dockerfile}\n')
+        (b / 'image-name').write_text('local/drupal:bfep\n')
+        fake = self.tmp / 'fakebin'
+        fake.mkdir()
+        calls = self.tmp / 'docker-calls'
+        (fake / 'docker').write_text(
+            '#!/bin/sh\n'
+            f'echo "$*" >> {calls}\n'
+            'case "$*" in *"drush status"*) echo Successful ;; *"which psql"*) exit 1 ;; esac\n'
+            'exit 0\n')
+        (fake / 'docker').chmod(0o755)
+        env = {'PATH': f"{fake}:{os.environ['PATH']}", 'APP_DIR': str(app), 'BACKUP_ROOT': str(backups)}
+
+        r = subprocess.run([str(ROOT / 'bin' / 'bfep'), 'update', 'rollback', '20261015-083023'],
+                           env={**self.env, **env}, input='y\n', capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('Rolled back to 20261015-083023', r.stdout)
+        self.assertEqual(dockerfile.read_text(), 'FROM drupal:11.4.8-php8.5-apache-trixie\n')
+        log = calls.read_text()
+        self.assertIn('tag bfep-drupal-rollback:20261015-083023 local/drupal:bfep', log)
+        self.assertIn('compose up -d --no-build --force-recreate drupal', log)
+        self.assertIn('system.maintenance_mode 0', log)
+
+        # A missing backup is refused before anything changes.
+        r = self.bfep('update', 'rollback', '20991231-000000', env=env)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn('no complete backup', r.stderr)
+
     # install.sh
 
     def test_install_links_bfep_and_wraps_old_scripts(self):
