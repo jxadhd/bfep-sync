@@ -11,6 +11,8 @@
 # newest drupal image on Docker Hub with the same variant (-php8.5-apache-trixie)
 # in the same minor series, pinned by digest. A new major version is never
 # picked. The old Dockerfile is kept with the backup and put back on rollback.
+# When a newer minor or major release is out, preflight prints a notice with
+# the steps to move to it (and, for a major, which modules are ready).
 #
 # Custom modules/themes are bind-mounted and are not touched (use bfep deploy).
 # This is the former /usr/local/bin/bfep-update, plus the base image update
@@ -29,7 +31,8 @@ PG_DUMP_IMAGE="${PG_DUMP_IMAGE:-postgres:18-alpine}"  # used when the container 
 KEEP="${KEEP:-5}"
 IMAGE_BUMP="${IMAGE_BUMP:-1}"       # 0 = keep the Dockerfile's base image as it is
 MINOR="${MINOR:-0}"                 # 1 = allow a new minor release, not only patches
-LIB="${BFEP_ROOT:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/..}/lib"
+BFEP_DIR="${BFEP_ROOT:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/..}"
+LIB="$BFEP_DIR/lib"
 
 say() { printf '\n==> %s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -97,6 +100,7 @@ fi
 echo "Update method: $MODE (service '$SERVICE')"
 
 DOCKERFILE=""
+NEWER=""
 if [[ "$MODE" == "build" && "$IMAGE_BUMP" == "1" ]]; then
   bump_flags=()
   [[ "$MINOR" == "1" ]] && bump_flags+=(--minor)
@@ -108,6 +112,9 @@ if [[ "$MODE" == "build" && "$IMAGE_BUMP" == "1" ]]; then
   echo "Base image ($DOCKERFILE): $(grep -m1 -i '^FROM' "$DOCKERFILE")"
   python3 "$LIB/drupal_image.py" bump "$DOCKERFILE" --check "${bump_flags[@]}" \
     || die "could not check for a newer base image; run with IMAGE_BUMP=0 to rebuild without changing it"
+  NEWER="$(python3 "$LIB/drupal_image.py" newer "$DOCKERFILE" "${bump_flags[@]}" \
+    "${MODULES_DEST:-$APP_DIR/modules/custom}" "${THEMES_DEST:-$APP_DIR/themes/custom}" || true)"
+  [[ -n "$NEWER" ]] && printf '\n%s\n' "$NEWER"
 fi
 [[ "$CHECK" == "1" ]] && { say "Check only; nothing changed"; exit 0; }
 
@@ -195,3 +202,6 @@ docker images --format '{{.Repository}}:{{.Tag}}' bfep-drupal-rollback | sort -r
 docker image prune -f >/dev/null || true
 
 say "Update complete. Backup: $B"
+# Repeated here so it isn't lost in the build output above.
+[[ -n "$NEWER" ]] && printf '\n%s\n' "$NEWER"
+exit 0

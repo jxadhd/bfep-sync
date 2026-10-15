@@ -106,5 +106,83 @@ class DockerfileTest(unittest.TestCase):
             di.dockerfile(cfg, 'drupal')
 
 
+def fake_fetch(names):
+    """A hub_tags stand-in serving the given tag names by prefix."""
+    def fetch(prefix):
+        return [{'name': n, 'digest': 'sha256:' + '1' * 64} for n in names if n.startswith(prefix)]
+    return fetch
+
+
+class NewerTest(unittest.TestCase):
+
+    def dockerfile(self, first_line: str) -> pathlib.Path:
+        d = pathlib.Path(tempfile.mkdtemp(prefix='bfep-img-'))
+        p = d / 'Dockerfile.drupal'
+        p.write_text(first_line + '\nRUN composer require \\\n  "drupal/honeypot:^2.2" \\\n'
+                     '  "drupal/oidc:^2.3.0" \\\n  "drush/drush:^13.7.6"\n')
+        return p
+
+    def releases(self, name):
+        return {
+            'drupal/honeypot': di.expand([{'version': '2.3.0', 'require': {'drupal/core': '^11 || ^12'}},
+                                          {'version': '2.2.2', 'require': {'drupal/core': '^10.3 || ^11'}}]),
+            'drupal/oidc': di.expand([{'version': '3.0.0-beta1', 'require': {'drupal/core': '^12'}},
+                                      {'version': '2.3.0', 'require': {'drupal/core': '^10 || ^11'}}]),
+        }[name]
+
+    def test_nothing_newer(self):
+        p = self.dockerfile(f'FROM drupal:11.4.10{V}')
+        self.assertEqual(di.newer(str(p), fetch=fake_fetch(['11.4.10' + V])), '')
+
+    def test_new_minor_without_minor_flag(self):
+        p = self.dockerfile(f'FROM drupal:11.4.10{V}')
+        msg = di.newer(str(p), fetch=fake_fetch(['11.4.10' + V, '11.5.0' + V, '11.5.1' + V]))
+        self.assertIn('Drupal 11.5.1 is out', msg)
+        self.assertIn('MINOR=1 bfep update', msg)
+        self.assertEqual(di.newer(str(p), minor=True,
+                                  fetch=fake_fetch(['11.4.10' + V, '11.5.1' + V])), '')
+
+    def test_prerelease_of_next_major_is_only_fyi(self):
+        p = self.dockerfile(f'FROM drupal:11.4.10{V}')
+        msg = di.newer(str(p), fetch=fake_fetch(['11.4.10' + V, '12.0.0-beta1' + V]))
+        self.assertTrue(msg.startswith('FYI: Drupal 12.0.0-beta1'), msg)
+
+    def test_new_major_lists_steps_and_module_readiness(self):
+        custom = pathlib.Path(tempfile.mkdtemp(prefix='bfep-custom-'))
+        (custom / 'bfep').mkdir()
+        (custom / 'bfep' / 'bfep.info.yml').write_text("name: BFEP\ncore_version_requirement: '^10 || ^11'\n")
+        (custom / 'butterfly').mkdir()
+        (custom / 'butterfly' / 'butterfly.info.yml').write_text('core_version_requirement: ^11 || ^12\n')
+        p = self.dockerfile(f'FROM drupal:11.4.10{V}')
+        msg = di.newer(str(p), custom_dirs=[str(custom)], releases=self.releases,
+                       fetch=fake_fetch(['11.4.10' + V, '12.0.0' + V, '12.0.2' + V, '12.0.2-php8.6-apache-trixie']))
+        self.assertIn('NOTICE: Drupal 12 is out (newest: 12.0.2)', msg)
+        self.assertRegex(msg, r'drupal/honeypot\s+ready: 2.3.0')
+        self.assertRegex(msg, r'drupal/oidc\s+ready: 3.0.0-beta1 \(pre-release only\)')
+        self.assertRegex(msg, r'bfep\s+needs updating')
+        self.assertRegex(msg, r'butterfly\s+ready')
+        self.assertIn(f'drupal:12.0.2{V}', msg)
+
+    def test_unreachable_package_metadata_is_unknown(self):
+        def boom(name):
+            raise OSError('offline')
+        p = self.dockerfile(f'FROM drupal:11.4.10{V}')
+        msg = di.newer(str(p), releases=boom, fetch=fake_fetch(['11.4.10' + V, '12.0.0' + V]))
+        self.assertIn('unknown (could not read packages.drupal.org: offline)', msg)
+
+
+class SupportsTest(unittest.TestCase):
+
+    def test_constraints(self):
+        for c, want in (('^10.3 || ^11', False), ('^11 || ^12', True), ('^12.1', True),
+                        ('>=10', True), ('>=10 <12', False), ('>=10 <13', True), ('~12.0', True),
+                        ('12.x', True), ('^10|^12', True)):
+            self.assertEqual(di.supports(c, 12), want, c)
+
+    def test_expand_minified_metadata(self):
+        v = di.expand([{'version': '2', 'require': {'a': '1'}, 'x': 1}, {'version': '1', 'x': '__unset'}])
+        self.assertEqual(v[1], {'version': '1', 'require': {'a': '1'}})
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -12,20 +12,31 @@ picked: that needs testing on a copy of the site first.
 
     python3 drupal_image.py dockerfile <compose-config.json> <service>
     python3 drupal_image.py bump <Dockerfile> [--minor] [--check]
+    python3 drupal_image.py newer <Dockerfile> [--minor] [<custom dir>...]
 
 `dockerfile` prints the path of the service's Dockerfile. `bump` prints one
 line saying what changed and exits 0, or exits 3 if the FROM line can't be
 handled (nothing is written then). With --check it only reports.
+
+`newer` prints a notice when a release that `bump` won't move to is out: a
+new minor (without --minor) or a new major version, with the steps to take
+and, for a major, whether each contrib module in the Dockerfile and each
+custom module or theme under the given folders already supports it. It
+prints nothing when there is nothing newer, and always exits 0.
 """
 from __future__ import annotations
 
 import json
 import os
+import pathlib
 import re
 import sys
 import urllib.request
 
 HUB = 'https://hub.docker.com/v2/repositories/library/drupal/tags'
+DRUPAL_PACKAGES = 'https://packages.drupal.org/files/packages/8/p2/{name}.json'
+RELEASE_NOTES = 'https://www.drupal.org/project/drupal/releases/{version}'
+UPGRADE_GUIDE = 'https://www.drupal.org/docs/upgrading-drupal'
 MAX_PAGES = 20
 
 FROM_RE = re.compile(
@@ -132,6 +143,191 @@ def bump(path: str, minor: bool = False, check: bool = False, tags: list[dict] |
     return f'moved {what} ({digest[:19]})'
 
 
+STABLE_RE = re.compile(r'^(\d+)\.(\d+)\.(\d+)(-.*)?$')
+PRERELEASE_RE = re.compile(r'^(\d+)\.(\d+)\.(\d+)-(alpha|beta|rc)\d*(-.*)?$')
+
+
+def series(major: int, start: int, fetch=None) -> list[dict]:
+    """Tags of major.start.x, major.start+1.x, ... until a series has none."""
+    fetch = fetch or hub_tags
+    out: list[dict] = []
+    for m in range(start, start + 20):
+        more = fetch(f'{major}.{m}.')
+        if not more:
+            break
+        out += more
+    return out
+
+
+def newest_stable(tags: list[dict], major: int, min_minor: int = 0) -> tuple[str, set[str]] | None:
+    """(version, its variants) of the newest stable release in a major."""
+    found: dict[tuple[int, ...], set[str]] = {}
+    for t in tags:
+        name = t.get('name', '')
+        m = STABLE_RE.match(name)
+        if not m or PRERELEASE_RE.match(name):
+            continue
+        v = tuple(int(x) for x in m.groups()[:3])
+        if v[0] == major and v[1] >= min_minor:
+            found.setdefault(v, set()).add(m[4] or '')
+    if not found:
+        return None
+    v = max(found)
+    return '.'.join(map(str, v)), found[v]
+
+
+def newest_prerelease(tags: list[dict], major: int) -> str | None:
+    best = None
+    for t in tags:
+        m = PRERELEASE_RE.match(t.get('name', ''))
+        if m and int(m[1]) == major:
+            label = t['name'][:len(t['name']) - len(m[5] or '')]
+            if best is None or label > best:
+                best = label
+    return best
+
+
+def supports(constraint: str, major: int) -> bool:
+    """Whether a Composer constraint such as "^10.3 || ^11" allows the major."""
+    for alt in re.split(r'\s*\|\|?\s*', constraint.strip()):
+        parts = [x for x in re.split(r'[\s,]+', alt) if x]
+        lows, highs, ok = [], [], False
+        for x in parts:
+            m = re.match(r'^(\^|~|>=|>|<=|<|==|=)?v?(\d+)', x)
+            if not m:
+                continue
+            op, n = m[1] or '', int(m[2])
+            if op in ('^', '~', '', '=', '=='):
+                ok = ok or n == major
+            elif op in ('>=', '>'):
+                lows.append(n)
+            else:
+                highs.append((op, n))
+        if ok:
+            return True
+        if lows and all(n <= major for n in lows) and all(
+                n > major or (op == '<=' and n == major) for op, n in highs):
+            return True
+    return False
+
+
+def expand(versions: list[dict]) -> list[dict]:
+    """Undo Composer 2 metadata minification (each entry lists only changes)."""
+    out, prev = [], {}
+    for v in versions:
+        cur = dict(prev)
+        for k, val in v.items():
+            if val == '__unset':
+                cur.pop(k, None)
+            else:
+                cur[k] = val
+        out.append(cur)
+        prev = cur
+    return out
+
+
+def drupal_releases(name: str) -> list[dict]:
+    url = DRUPAL_PACKAGES.format(name=name)
+    req = urllib.request.Request(url, headers={'User-Agent': 'bfep-update'})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        data = json.load(r)
+    return expand(data.get('packages', {}).get(name, []))
+
+
+def contrib_status(name: str, major: int, releases) -> str:
+    try:
+        versions = releases(name)
+    except (OSError, ValueError) as e:
+        return f'unknown (could not read packages.drupal.org: {e})'
+    stable = [v for v in versions if not re.search(r'(alpha|beta|rc|dev)', v.get('version', ''), re.I)]
+    for group, label in ((stable, ''), (versions, ' (pre-release only)')):
+        for v in group:
+            core = v.get('require', {}).get('drupal/core', '')
+            if core and supports(core, major):
+                return f'ready: {v["version"]}{label}'
+    return 'NOT ready yet'
+
+
+def contrib_modules(text: str) -> list[str]:
+    names = re.findall(r'["\s](drupal/[a-z0-9_]+):', text)
+    return sorted({n for n in names if not n.startswith('drupal/core')})
+
+
+def custom_status(dirs: list[str], major: int) -> list[str]:
+    lines = []
+    for d in dirs:
+        for info in sorted(pathlib.Path(d).glob('*/*.info.yml')):
+            m = re.search(r'^core_version_requirement:\s*[\'"]?([^\'"\n]+)', info.read_text(), re.M)
+            if not m:
+                state = 'no core_version_requirement'
+            else:
+                state = ('ready' if supports(m[1], major) else 'needs updating') + f' ({m[1].strip()})'
+            lines.append(f'    {info.parent.name:<22} {state}')
+    return lines
+
+
+def newer(path: str, minor: bool = False, custom_dirs: list[str] | None = None,
+          fetch=None, releases=None) -> str:
+    """A notice about releases `bump` won't move to, or '' if there are none."""
+    with open(path, encoding='utf-8') as f:
+        text = f.read()
+    _, m = find_from(text)
+    current, variant = m['version'], m['variant'] or ''
+    major, mnr, _ = version_key(current)
+    releases = releases or drupal_releases
+    out: list[str] = []
+
+    if not minor:
+        found = newest_stable(series(major, mnr + 1, fetch), major, mnr + 1)
+        if found:
+            v = found[0]
+            out += [
+                f'NOTICE: Drupal {v} is out; this update stays on {major}.{mnr}.x.',
+                f'  Release notes: {RELEASE_NOTES.format(version=v)}',
+                '  Minor releases add features and deprecations but are meant to be backward compatible;',
+                '  database updates run automatically. When ready:  MINOR=1 bfep update',
+                '']
+
+    nxt = major + 1
+    tags = series(nxt, 0, fetch)
+    found = newest_stable(tags, nxt)
+    if not found:
+        pre = newest_prerelease(tags, nxt)
+        if pre:
+            out += [f'FYI: Drupal {pre} (a pre-release of Drupal {nxt}) is out. Nothing to do until {nxt}.0.0 is stable.', '']
+        return '\n'.join(out).rstrip()
+
+    v, variants = found
+    if variant in variants:
+        tag = f'{v}{variant}'
+    else:
+        tag = f'{v}<variant>  (no {variant.lstrip("-")} build; available: ' + \
+              ', '.join(sorted(x.lstrip('-') for x in variants if x)) + ')'
+    out += [
+        f'NOTICE: Drupal {nxt} is out (newest: {v}). You are on {current}.',
+        '  bfep update never moves to a new major version by itself.',
+        f'  Release notes: {RELEASE_NOTES.format(version=v)}',
+        f'  Upgrade guide: {UPGRADE_GUIDE}',
+        f'  Contrib modules (newest release that allows Drupal {nxt}):']
+    for name in contrib_modules(text):
+        out.append(f'    {name:<22} {contrib_status(name, nxt, releases)}')
+    out.append('    drush/drush            check https://www.drush.org for the version that supports it')
+    custom = custom_status(custom_dirs or [], nxt)
+    if custom:
+        out += [f'  Custom modules and themes (core_version_requirement must allow ^{nxt}):'] + custom
+    out += [
+        '  Steps:',
+        '    1. Wait until every module above is ready (or replace the ones that are not).',
+        '    2. Run the Upgrade Status module (drupal/upgrade_status) on a copy of the site',
+        '       and fix what it reports in the custom modules and theme.',
+        f'    3. In the site repo, change the FROM line of Dockerfile.drupal to drupal:{tag},',
+        f'       raise the contrib constraints that need it, set EXPECTED_DRUPAL_MAJOR to {nxt}',
+        '       in .github/workflows/image.yml, and let the image build check pass.',
+        '    4. Make the same FROM change in the server Dockerfile and run bfep update.',
+        '       It backs up first; roll back with: bfep update rollback <timestamp>']
+    return '\n'.join(out).rstrip()
+
+
 def dockerfile(config_json: str, service: str) -> str:
     """The Dockerfile path of a service in `docker compose config --format json`."""
     with open(config_json, encoding='utf-8') as f:
@@ -152,6 +348,14 @@ def main(argv: list[str]) -> int:
             print(dockerfile(argv[1], argv[2]))
         elif len(argv) >= 2 and argv[0] == 'bump' and set(argv[2:]) <= {'--minor', '--check'}:
             print(bump(argv[1], minor='--minor' in argv, check='--check' in argv))
+        elif len(argv) >= 2 and argv[0] == 'newer':
+            try:
+                msg = newer(argv[1], minor='--minor' in argv[2:],
+                            custom_dirs=[d for d in argv[2:] if d != '--minor'])
+            except (Unsupported, OSError, ValueError) as e:
+                msg = f'(could not check for newer Drupal releases: {e})'
+            if msg:
+                print(msg)
         else:
             print(__doc__.strip().split('\n\n')[2], file=sys.stderr)
             return 2
