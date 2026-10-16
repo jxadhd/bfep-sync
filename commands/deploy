@@ -121,7 +121,7 @@ restore_maintenance() {
     echo "Could not turn maintenance mode off. Turn it off with:"
     echo "  docker exec -u www-data -w /opt/drupal $CONTAINER $DRUSH state:set system.maintenance_mode 0 --input-format=integer"
   fi
-  echo "See what is still pending with: docker exec -u www-data -w /opt/drupal $CONTAINER $DRUSH updb:status"
+  echo "See what is still pending with: docker exec -u www-data -w /opt/drupal $CONTAINER $DRUSH updatedb:status"
 } >&2
 
 if [[ "$NO_UPDB" != "1" ]]; then
