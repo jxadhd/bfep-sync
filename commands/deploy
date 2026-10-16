@@ -41,7 +41,7 @@ say() { printf '\n==> %s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 # Only one deploy at a time.
-exec 9>/var/lock/bfep-deploy.lock
+exec 9>"${SITE_DEPLOY_LOCK:-/var/lock/bfep-deploy.lock}"
 flock -n 9 || die "another bfep-deploy is already running"
 
 [[ -d "$REPO/.git" ]] || die "no git checkout at $REPO"
@@ -104,9 +104,37 @@ fi
 
 drush() { docker exec -u www-data -w /opt/drupal "$CONTAINER" "$DRUSH" "$@"; }
 
+# drush updb puts the site in maintenance mode while updates run, and only
+# turns it off after the last one succeeds. If an update fails or the deploy
+# is interrupted (Ctrl-C, a dropped SSH session), put maintenance mode back
+# the way it was, so the site isn't left on the maintenance page unattended.
+restore_maintenance() {
+  local rc=$?
+  [[ $rc -eq 0 ]] && return
+  set +e
+  trap - EXIT HUP INT TERM
+  echo
+  echo "Database updates did not finish (exit $rc)."
+  if drush state:set system.maintenance_mode 0 --input-format=integer && drush cr >/dev/null; then
+    echo "Maintenance mode is off again (drush turns it on while updates run)."
+  else
+    echo "Could not turn maintenance mode off. Turn it off with:"
+    echo "  docker exec -u www-data -w /opt/drupal $CONTAINER $DRUSH state:set system.maintenance_mode 0 --input-format=integer"
+  fi
+  echo "See what is still pending with: docker exec -u www-data -w /opt/drupal $CONTAINER $DRUSH updb:status"
+} >&2
+
 if [[ "$NO_UPDB" != "1" ]]; then
   say "Running database updates"
+  maint_was="$(drush state:get system.maintenance_mode 2>/dev/null || true)"
+  if [[ "$maint_was" != "1" && "$maint_was" != "true" ]]; then
+    trap restore_maintenance EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+  fi
   drush updb -y
+  trap - EXIT HUP INT TERM
 fi
 say "Clearing caches"
 drush cr

@@ -22,6 +22,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 TOOLS = ('bash', 'git', 'rsync', 'flock')
 INNER = 'BFEP_CLI_TEST_INNER'   # set while a deploy runs the suite, to stop recursion
 SCRIPT_SETTINGS = {'DRY_RUN', 'LIVE', 'PREV', 'REPO', 'ENV_FILE', 'RUN_LOCK', 'DEPLOY_LOCK',
+                   'SITE_DEPLOY_LOCK', 'MODULES_DEST', 'THEMES_DEST', 'NO_UPDB', 'IMAGE_BUMP', 'NO_DEPLOY',
+                   'CHECK', 'MINOR', 'DB_DUMP', 'APP_DIR', 'BACKUP_ROOT',
                    'UNIT', 'BIN', 'KEEP_DIR', 'BFEP_LEGACY_DIR', 'BFEP_SYNC_TEST_DSN'}
 
 
@@ -282,6 +284,94 @@ class BfepCommandTest(unittest.TestCase):
         r = self.bfep('update', 'rollback', '20991231-000000', env=env)
         self.assertEqual(r.returncode, 1)
         self.assertIn('no complete backup', r.stderr)
+
+    # Maintenance mode is never left on by a failed deploy or update
+
+    def fake_docker(self, fail=''):
+        """A docker that logs its calls; `fail` names the step that fails."""
+        fake = self.tmp / 'fakebin'
+        fake.mkdir(exist_ok=True)
+        calls = self.tmp / 'docker-calls'
+        (fake / 'docker').write_text(
+            '#!/bin/sh\n'
+            f'echo "$*" >> {calls}\n'
+            'case "$*" in\n'
+            '  "compose config -q") ;;\n'
+            '  "compose config"*) printf "services:\\n  drupal:\\n    build:\\n      context: .\\n" ;;\n'
+            '  *"drush status"*) echo Successful ;;\n'
+            '  *"state:get system.maintenance_mode"*) echo 0 ;;\n'
+            '  *"ls /opt/drupal/vendor/bin/drush"*) echo vendor/bin/drush ;;\n'
+            f'  *"compose build"*) [ "{fail}" = build ] && exit 1 ;;\n'
+            f'  *"updb -y"*) [ "{fail}" = updb ] && exit 1 ;;\n'
+            'esac\n'
+            'exit 0\n')
+        (fake / 'docker').chmod(0o755)
+        return {'PATH': f"{fake}:{os.environ['PATH']}"}, calls
+
+    def site_repo(self):
+        """A site checkout with one custom module, as bfep deploy expects."""
+        origin, repo = self.tmp / 'site-origin', self.tmp / 'site'
+        (origin / 'drupal' / 'modules' / 'custom' / 'bfep').mkdir(parents=True)
+        (origin / 'drupal' / 'modules' / 'custom' / 'bfep' / 'bfep.info.yml').write_text('name: BFEP\n')
+        self.git(origin, 'init', '-q', '-b', 'main')
+        self.git(origin, 'add', '-A')
+        self.git(origin, 'commit', '-q', '-m', 'site')
+        self.git(self.tmp, 'clone', '-q', str(origin), str(repo))
+        (self.tmp / 'modules').mkdir()
+        return {'REPO': str(repo), 'MODULES_DEST': str(self.tmp / 'modules'),
+                'THEMES_DEST': str(self.tmp / 'themes'), 'SITE_DEPLOY_LOCK': str(self.tmp / 'site.lock')}
+
+    def test_deploy_turns_maintenance_off_when_updb_fails(self):
+        docker, calls = self.fake_docker(fail='updb')
+        r = self.bfep('deploy', env={**docker, **self.site_repo()})
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('Database updates did not finish', r.stderr)
+        self.assertIn('Maintenance mode is off again', r.stderr)
+        log = calls.read_text()
+        self.assertIn('state:set system.maintenance_mode 0', log)
+        self.assertLess(log.index('updb -y'), log.index('state:set system.maintenance_mode 0'))
+
+    def test_deploy_leaves_maintenance_alone_when_updb_works(self):
+        docker, calls = self.fake_docker()
+        r = self.bfep('deploy', env={**docker, **self.site_repo()})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn('maintenance_mode 0', calls.read_text())
+
+    def update_env(self, docker):
+        app = self.tmp / 'app'
+        app.mkdir()
+        dump = self.tmp / 'manual.dump'
+        dump.write_text('dump')
+        return {**docker, 'APP_DIR': str(app), 'BACKUP_ROOT': str(self.tmp / 'backups'),
+                'NO_DEPLOY': '1', 'IMAGE_BUMP': '0', 'DB_DUMP': str(dump)}
+
+    def test_update_failed_build_turns_maintenance_off(self):
+        docker, calls = self.fake_docker(fail='build')
+        r = self.bfep('update', env=self.update_env(docker))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn('FAILED (exit 1) while: build', r.stderr)
+        self.assertIn('Maintenance mode is off again', r.stderr)
+        self.assertNotIn('bfep update rollback', r.stderr)
+        log = calls.read_text()
+        self.assertLess(log.index('maintenance_mode 1'), log.index('maintenance_mode 0'))
+        self.assertNotIn('compose up', log)
+
+    def test_update_failed_database_update_keeps_maintenance_on(self):
+        docker, calls = self.fake_docker(fail='updb')
+        r = self.bfep('update', env=self.update_env(docker))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn('while: database updates', r.stderr)
+        self.assertIn('still in maintenance mode', r.stderr)
+        self.assertIn('bfep update rollback 20', r.stderr)
+        self.assertNotIn('maintenance_mode 0', calls.read_text())
+
+    def test_update_success_turns_maintenance_off(self):
+        docker, calls = self.fake_docker()
+        r = self.bfep('update', env={**self.update_env(docker), 'SITE_URL': 'http://127.0.0.1:9/'})
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn('Update complete', r.stdout)
+        self.assertNotIn('FAILED', r.stderr)
+        self.assertIn('maintenance_mode 0', calls.read_text())
 
     # install.sh
 

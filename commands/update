@@ -128,7 +128,7 @@ if [[ "$NO_DEPLOY" != "1" ]]; then
 fi
 
 say "Preflight"
-df -Pm "$BACKUP_ROOT" /var/lib/docker 2>/dev/null | awk 'NR>1 && $4 < 3000 {print "WARNING: only " $4 " MB free on " $6}'
+df -Pm "$BACKUP_ROOT" /var/lib/docker 2>/dev/null | awk 'NR>1 && $4 < 3000 {print "WARNING: only " $4 " MB free on " $6}' || true
 echo "Current core: $(drush status --field=drupal-version 2>/dev/null || echo unknown)"
 echo "--- outdated direct packages ---"
 comp outdated --direct --no-ansi 2>&1 || true
@@ -201,17 +201,66 @@ fi
 docker tag "$(docker inspect -f '{{.Image}}' "$CONTAINER")" "bfep-drupal-rollback:$TS"
 echo "Backup ok: $(du -sh "$B" | cut -f1). Roll back with: bfep update rollback $TS"
 
-trap 'echo; echo "FAILED at line $LINENO. Site may still be in maintenance mode."; echo "Roll back with: bfep update rollback '"$TS"'" >&2' ERR
+# From here on, a failure or an interruption (Ctrl-C, a dropped SSH session)
+# must not leave the site in maintenance mode with nobody watching. Until the
+# container is recreated the old one is still running unchanged, so the trap
+# puts the Dockerfile back and turns maintenance mode off again. After that the
+# new image is live but not finished, so maintenance mode stays on and the
+# trap says how to roll back or turn it off.
+STAGE=bump
+MAINT_WAS=""
+on_exit() {
+  local rc=$?
+  [[ $rc -eq 0 ]] && return
+  set +e
+  trap - EXIT HUP INT TERM
+  echo
+  echo "FAILED (exit $rc) while: $STAGE"
+  case "$STAGE" in
+    bump | maintenance | build)
+      if [[ -n "$DOCKERFILE" && -f "$B/Dockerfile" ]] && ! cmp -s "$B/Dockerfile" "$DOCKERFILE"; then
+        cp "$B/Dockerfile" "$DOCKERFILE" && echo "Dockerfile put back to: $(grep -m1 -i '^FROM' "$DOCKERFILE")"
+      fi
+      if [[ "$STAGE" != "bump" && "$MAINT_WAS" != "1" ]]; then
+        if drush state:set system.maintenance_mode 0 --input-format=integer && drush cr >/dev/null; then
+          echo "Maintenance mode is off again. The site is running the old image, as before; no rollback needed."
+        else
+          echo "Could not turn maintenance mode off. Turn it off with:"
+          echo "  docker exec -u www-data -w /opt/drupal $CONTAINER vendor/bin/drush state:set system.maintenance_mode 0 --input-format=integer"
+        fi
+      fi
+      ;;
+    verifying*)
+      echo "The update itself finished; only the checks after it failed."
+      echo "If the site is broken, roll back with: bfep update rollback $TS"
+      ;;
+    *)
+      echo "The new image is running but the update did not finish, so the site is still in maintenance mode."
+      echo "If the site works, turn it off with:"
+      echo "  docker exec -u www-data -w /opt/drupal $CONTAINER vendor/bin/drush state:set system.maintenance_mode 0 --input-format=integer"
+      echo "  docker exec -u www-data -w /opt/drupal $CONTAINER vendor/bin/drush cr"
+      echo "Otherwise roll back with: bfep update rollback $TS"
+      ;;
+  esac
+} >&2
+trap on_exit EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 if [[ -n "$DOCKERFILE" ]]; then
   say "Updating the base image"
   python3 "$LIB/drupal_image.py" bump "$DOCKERFILE" "${bump_flags[@]}"
 fi
 
+STAGE=maintenance
+MAINT_WAS="$(drush state:get system.maintenance_mode 2>/dev/null || true)"
+[[ "$MAINT_WAS" == "true" ]] && MAINT_WAS=1
 say "Maintenance mode on"
 drush state:set system.maintenance_mode 1 --input-format=integer
 drush cr
 
+STAGE=build
 if [[ "$MODE" == "build" ]]; then
   say "Rebuilding image (pulling latest base image, no cache)"
   $DC build --pull --no-cache "$SERVICE"
@@ -220,14 +269,21 @@ else
   $DC pull "$SERVICE"
 fi
 
+STAGE="recreating the container"
 say "Recreating container"
 $DC up -d "$SERVICE"
 wait_ready
 
+STAGE="database updates"
 say "Database updates"
 drush updb -y
 drush cr
-drush state:set system.maintenance_mode 0 --input-format=integer
+if [[ "$MAINT_WAS" == "1" ]]; then
+  echo "Maintenance mode was already on before this update, so it stays on."
+else
+  drush state:set system.maintenance_mode 0 --input-format=integer
+fi
+STAGE="verifying (the update itself finished)"
 
 say "Verifying"
 comp show --direct --no-ansi > "$B/packages-after.txt" 2>/dev/null || true
