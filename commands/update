@@ -10,7 +10,9 @@
 #
 # Before rebuilding, the FROM line of the service's Dockerfile is moved to the
 # newest drupal image on Docker Hub with the same variant (-php8.5-apache-trixie)
-# in the same minor series, pinned by digest. A new major version is never
+# in the same minor series, pinned by digest. A FROM line with only a digest
+# (FROM drupal@sha256:..., as Dependabot writes it in the site repo) is looked
+# up on Docker Hub by that digest first. A new major version is never
 # picked. The old Dockerfile is kept with the backup and put back on rollback.
 # When a newer minor or major release is out, preflight prints a notice with
 # the steps to move to it (and, for a major, which modules are ready).
@@ -41,6 +43,9 @@ BFEP_DIR="${BFEP_ROOT:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/..}"
 LIB="$BFEP_DIR/lib"
 
 say() { printf '\n==> %s\n' "$*"; }
+# Settings go on the same line as the command. "IMAGE_BUMP=0" typed on a line
+# of its own sets a shell variable that bfep never sees.
+NO_BUMP_HINT="To rebuild without changing the base image, run this as one line: IMAGE_BUMP=0 bfep update"
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 # shellcheck source=../lib/cli.sh
 . "$LIB/cli.sh"
@@ -145,11 +150,11 @@ if [[ "$MODE" == "build" && "$IMAGE_BUMP" == "1" ]]; then
   cfg="$(mktemp)"
   $DC config --format json > "$cfg"
   DOCKERFILE="$(python3 "$LIB/drupal_image.py" dockerfile "$cfg" "$SERVICE")" \
-    || { rm -f "$cfg"; die "could not find the Dockerfile; run with IMAGE_BUMP=0 to rebuild without changing it"; }
+    || { rm -f "$cfg"; die "could not find the Dockerfile. $NO_BUMP_HINT"; }
   rm -f "$cfg"
   echo "Base image ($DOCKERFILE): $(grep -m1 -i '^FROM' "$DOCKERFILE")"
   python3 "$LIB/drupal_image.py" bump "$DOCKERFILE" --check "${bump_flags[@]}" \
-    || die "could not check for a newer base image; run with IMAGE_BUMP=0 to rebuild without changing it"
+    || die "could not check for a newer base image (see above). $NO_BUMP_HINT"
   NEWER="$(python3 "$LIB/drupal_image.py" newer "$DOCKERFILE" "${bump_flags[@]}" \
     "${MODULES_DEST:-$APP_DIR/modules/custom}" "${THEMES_DEST:-$APP_DIR/themes/custom}" || true)"
   [[ -n "$NEWER" ]] && printf '\n%s\n' "$NEWER"

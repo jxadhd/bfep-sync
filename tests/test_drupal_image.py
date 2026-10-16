@@ -68,9 +68,33 @@ class BumpTest(unittest.TestCase):
         self.assertEqual(p.read_text().split('\n')[0],
                          f"FROM docker.io/library/drupal:11.4.10{V}@{D['11.4.10']} AS base")
 
-    def test_digest_only_or_other_images_are_refused(self):
-        for line in (f"FROM drupal@{D['11.4.8']}", 'FROM drupal:11.4-php8.5-apache-trixie',
-                     'FROM php:8.5-apache'):
+    def test_digest_only_is_looked_up_and_gets_its_tag(self):
+        # Dependabot's form in the site repo; 11.4.8 has shorter alias tags too.
+        tags = TAGS + [{'name': '11.4.8', 'digest': D['11.4.8']},
+                       {'name': '11.4.8-apache', 'digest': D['11.4.8']}]
+        p = self.dockerfile(f"FROM drupal@{D['11.4.8']}")
+        msg = di.bump(str(p), tags=tags)
+        self.assertIn(f"drupal@{D['11.4.8'][:19]}... (drupal:11.4.8{V}) -> 11.4.10{V}", msg)
+        self.assertEqual(p.read_text().split('\n')[0], f"FROM drupal:11.4.10{V}@{D['11.4.10']}")
+
+    def test_digest_only_already_newest_still_gets_its_tag(self):
+        p = self.dockerfile(f"FROM drupal@{D['11.4.10']}")
+        self.assertIn('tagged FROM line', di.bump(str(p), check=True, tags=TAGS))
+        self.assertEqual(p.read_text().split('\n')[0], f"FROM drupal@{D['11.4.10']}")
+        di.bump(str(p), tags=TAGS)
+        self.assertEqual(p.read_text().split('\n')[0], f"FROM drupal:11.4.10{V}@{D['11.4.10']}")
+
+    def test_unknown_digest_explains_what_to_do(self):
+        p = self.dockerfile(f"FROM drupal@sha256:{'0' * 64}")
+        before = p.read_text()
+        with self.assertRaises(di.Unsupported) as e:
+            di.bump(str(p), tags=TAGS)
+        self.assertIn('IMAGE_BUMP=0 bfep update', str(e.exception))
+        self.assertIn('FROM drupal:11.4.10-php8.5-apache-trixie', str(e.exception))
+        self.assertEqual(p.read_text(), before)
+
+    def test_other_images_are_refused(self):
+        for line in ('FROM drupal:11.4-php8.5-apache-trixie', 'FROM drupal', 'FROM php:8.5-apache'):
             p = self.dockerfile(line)
             before = p.read_text()
             with self.assertRaises(di.Unsupported, msg=line):
@@ -133,6 +157,11 @@ class NewerTest(unittest.TestCase):
     def test_nothing_newer(self):
         p = self.dockerfile(f'FROM drupal:11.4.10{V}')
         self.assertEqual(di.newer(str(p), fetch=fake_fetch(['11.4.10' + V])), '')
+
+    def test_digest_only_reads_the_version_from_docker_hub(self):
+        p = self.dockerfile(f"FROM drupal@{D['11.4.10']}")
+        msg = di.newer(str(p), fetch=fake_fetch(['11.4.10' + V, '11.5.0' + V]), tags=TAGS)
+        self.assertIn('Drupal 11.5.0 is out; this update stays on 11.4.x', msg)
 
     def test_new_minor_without_minor_flag(self):
         p = self.dockerfile(f'FROM drupal:11.4.10{V}')
