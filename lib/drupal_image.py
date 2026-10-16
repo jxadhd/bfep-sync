@@ -5,7 +5,9 @@ versioned tag, for example
 
     FROM drupal:11.4.8-php8.5-apache-trixie@sha256:...
 
-and is rewritten to the newest tag with the same variant (-php8.5-apache-trixie)
+or a digest alone (FROM drupal@sha256:..., the form Dependabot writes in the
+site repo), in which case the tag is looked up on Docker Hub by that digest.
+It is rewritten to the newest tag with the same variant (-php8.5-apache-trixie)
 in the same minor series (11.4.x), or with --minor in the same major (11.x),
 pinned to that tag's digest from Docker Hub. A new major version is never
 picked: that needs testing on a copy of the site first.
@@ -41,8 +43,8 @@ MAX_PAGES = 20
 
 FROM_RE = re.compile(
     r'^(?P<lead>FROM\s+(?:--platform=\S+\s+)?)'
-    r'(?P<repo>(?:docker\.io/)?(?:library/)?drupal):'
-    r'(?P<version>\d+\.\d+\.\d+)(?P<variant>-[A-Za-z0-9.-]+)?'
+    r'(?P<repo>(?:docker\.io/)?(?:library/)?drupal)'
+    r'(?::(?P<version>\d+\.\d+\.\d+)(?P<variant>-[A-Za-z0-9.-]+)?)?'
     r'(?:@(?P<digest>sha256:[0-9a-f]{64}))?'
     r'(?P<rest>\s.*)?$')
 
@@ -61,11 +63,42 @@ def find_from(text: str) -> tuple[int, re.Match]:
     for i, line in enumerate(lines):
         if re.match(r'^FROM\s', line, re.I):
             m = FROM_RE.match(line.rstrip('\r'))
-            if not m:
+            if not m or not (m['version'] or m['digest']):
                 raise Unsupported(
-                    f'line {i + 1} is "{line.strip()}"; expected FROM drupal:<x.y.z>-<variant>[@sha256:...]')
+                    f'line {i + 1} is "{line.strip()}"; expected FROM drupal:<x.y.z>-<variant>[@sha256:...]'
+                    ' or FROM drupal@sha256:...')
             return i, m
     raise Unsupported('no FROM line')
+
+
+def tag_for_digest(digest: str, tags: list[dict]) -> tuple[str, str] | None:
+    """(version, variant) of the most specific x.y.z tag with this digest.
+
+    One image has many tags (11.4.10, 11.4.10-apache, 11.4.10-php8.5-apache-
+    trixie, ...). The longest name spells out every part of the variant, so
+    later updates keep the same PHP version, web server and Debian release
+    even when the image's defaults move on.
+    """
+    best = None
+    for t in tags:
+        m = re.match(r'^(\d+\.\d+\.\d+)(-[A-Za-z0-9.-]+)?$', t.get('name', ''))
+        if m and t.get('digest') == digest and (best is None or len(t['name']) > len(best[0] + best[1])):
+            best = (m[1], m[2] or '')
+    return best
+
+
+def current_image(m: re.Match, tags: list[dict] | None = None) -> tuple[str, str]:
+    """(version, variant) the FROM line uses, looking a bare digest up on Docker Hub."""
+    if m['version']:
+        return m['version'], m['variant'] or ''
+    found = tag_for_digest(m['digest'], hub_recent() if tags is None else tags)
+    if found is None:
+        raise Unsupported(
+            f'the FROM line names the image by digest only (drupal@{m["digest"][:19]}...) and Docker Hub '
+            'no longer lists a tag with that digest, so its version is unknown. Write the tag into the '
+            'line, for example FROM drupal:11.4.10-php8.5-apache-trixie (bfep update adds the digest), '
+            'or rebuild without changing it: IMAGE_BUMP=0 bfep update')
+    return found
 
 
 def newest(tags: list[dict], current: str, variant: str, minor: bool) -> tuple[str, str] | None:
@@ -103,11 +136,27 @@ def hub_tags(prefix: str) -> list[dict]:
     return out
 
 
+def hub_recent(pages: int = 10) -> list[dict]:
+    """The most recently pushed drupal tags, newest first."""
+    url = f'{HUB}?page_size=100&ordering=last_updated'
+    out: list[dict] = []
+    for _ in range(pages):
+        req = urllib.request.Request(url, headers={'User-Agent': 'bfep-update'})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            page = json.load(r)
+        out += page.get('results', [])
+        url = page.get('next')
+        if not url:
+            break
+    return out
+
+
 def bump(path: str, minor: bool = False, check: bool = False, tags: list[dict] | None = None) -> str:
     with open(path, encoding='utf-8') as f:
         text = f.read()
     i, m = find_from(text)
-    current, variant = m['version'], m['variant'] or ''
+    current, variant = current_image(m, tags)
+    was = f'drupal:{current}{variant}' if m['version'] else f'drupal@{m["digest"][:19]}... (drupal:{current}{variant})'
     major, mnr, _ = version_key(current)
     if tags is None:
         tags = hub_tags(f'{major}.{mnr}.')
@@ -125,12 +174,16 @@ def bump(path: str, minor: bool = False, check: bool = False, tags: list[dict] |
         raise Unsupported(f'Docker Hub lists no drupal:{major}.{mnr}.x{variant} tags')
     version, digest = found
     if version_key(version) < version_key(current):
-        return f'drupal:{current}{variant} is newer than Docker Hub\'s newest ({version}); left as is'
-    if version == current and digest == m['digest']:
-        return f'drupal:{current}{variant} is already the newest image'
+        return f'{was} is newer than Docker Hub\'s newest ({version}); left as is'
+    if version == current and digest == m['digest'] and m['version']:
+        return f'{was} is already the newest image'
     line = f"{m['lead']}{m['repo']}:{version}{variant}@{digest}{m['rest'] or ''}"
-    what = (f'drupal:{current}{variant} -> {version}{variant}' if version != current
-            else f'drupal:{current}{variant} has a newer build')
+    if version != current:
+        what = f'{was} -> {version}{variant}'
+    elif digest != m['digest']:
+        what = f'{was} has a newer build'
+    else:
+        what = f'{was} to a tagged FROM line (same image)'
     if check:
         return f'would move {what}'
     lines = text.split('\n')
@@ -267,12 +320,12 @@ def custom_status(dirs: list[str], major: int) -> list[str]:
 
 
 def newer(path: str, minor: bool = False, custom_dirs: list[str] | None = None,
-          fetch=None, releases=None) -> str:
+          fetch=None, releases=None, tags: list[dict] | None = None) -> str:
     """A notice about releases `bump` won't move to, or '' if there are none."""
     with open(path, encoding='utf-8') as f:
         text = f.read()
     _, m = find_from(text)
-    current, variant = m['version'], m['variant'] or ''
+    current, variant = current_image(m, tags)
     major, mnr, _ = version_key(current)
     releases = releases or drupal_releases
     out: list[str] = []
