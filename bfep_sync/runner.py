@@ -41,6 +41,7 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Callable, Iterable
 
+from . import repair
 from .providers import Blocked, Fetcher, Figures, NotConfigured, ParseError, Provider
 
 UA = 'TBEPSync/1.0 (+https://bfep.org)'
@@ -241,6 +242,7 @@ def run(store, providers: list[Provider], *, apply: bool, limit: int = 0, after:
                 out(f'{p.name}: batch fetch failed ({type(e).__name__}: {e}), fetching one at a time')
 
     blocked: set[str] = set()
+    attention: list[str] = []
     for row in rows:
         provider = provider_for(row.url, active)
         if provider is None or provider.name in blocked:
@@ -266,9 +268,12 @@ def run(store, providers: list[Provider], *, apply: bool, limit: int = 0, after:
             note = f' ({outcome.detail})' if outcome.detail else ''
             if outcome.held:
                 note += ', ' + why
-            if shown_status(outcome, row.consecutive_failures)[0] == 'not_found':
+            shown = shown_status(outcome, row.consecutive_failures)[0]
+            if shown == 'not_found':
                 note += ', sync turned off' if apply else ', sync would be turned off'
             out(f'{row.id}: {outcome.status}{note}')
+            if shown in repair.ATTENTION:
+                attention.append(f'{row.id} {shown}: {repair.fix_link(row.campaign_id, row.id)}')
         if apply:
             if outcome.status == 'ok':
                 store.record_ok(row.id, outcome.figures)
@@ -280,6 +285,10 @@ def run(store, providers: list[Provider], *, apply: bool, limit: int = 0, after:
             sleep(provider.delay + jitter() * 2)
 
     out(f'{dict(result.counts)} | changed: {result.changed}')
+    if attention:
+        out(f'Needs a look ({len(attention)}), see bfep sync problems for what to do:')
+        for line in attention:
+            out(f'  {line}')
     if apply and result.changed and after:
         subprocess.run(shlex.split(after), check=False)
     return result

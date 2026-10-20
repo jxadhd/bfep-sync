@@ -336,6 +336,24 @@ class SyncDetailsTest(PostgresTestCase):
         self.assertIsNone(d[6][0])                              # not found: nothing seen
         self.assertFalse(d[11][4])                              # untouched rows stay empty
 
+    def test_problems_lists_what_to_fix_and_where(self):
+        self.add_details()
+        self.run_new('--apply')
+        code, out, err = self.run_new('--problems')
+        self.assertEqual(code, 0, err)
+        self.assertIn('== suspicious_drop (1): Raised fell by more than 20%', out)
+        self.assertIn('  - line 105, fundraiser 5: stored 20,000 USD, platform shows 12,345.50 USD (-38%)', out)
+        self.assertIn('    edit: https://bfep.org/admin/bfep/campaign/5/fundraiser/5/edit', out)
+        self.assertIn('    page: https://www.gofundme.com/f/drop', out)
+        self.assertIn('  - line 107, fundraiser 7: no __NEXT_DATA__ block, failed 1 time in a row', out)
+        self.assertIn('  bfep sync accept 5 ', out)
+        self.assertLess(out.index('== suspicious_drop'), out.index('== parse_error'))
+
+    def test_problems_needs_the_script(self):
+        code, out, _ = self.run_new('--problems')
+        self.assertEqual(code, 4)
+        self.assertIn('run deploy/sync-details.sql', out)
+
     def test_without_the_script_nothing_changes(self):
         code, out, err = self.run_new('--apply')
         self.assertEqual(code, 0, err)
@@ -395,6 +413,8 @@ class ParityWithOriginalTest(PostgresTestCase):
             # Held lines add what the platform showed.
             new_lines = [re.sub(r'^(\d+: (?:suspicious_drop|currency_mismatch)), stored .*$', r'\1', line)
                          for line in new_lines]
+            # The run ends with a list of rows that need a look.
+            new_lines = [line for line in new_lines if not line.startswith(('Needs a look', '  '))]
             self.assertEqual(new_lines, old_out.splitlines())
         new_rows = self.table()
         self.dbname, orig = copy, self.dbname

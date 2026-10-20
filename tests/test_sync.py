@@ -439,6 +439,17 @@ class RunTest(unittest.TestCase):
         self.assertTrue(detail.startswith('stored 16,000 USD, platform shows 12,345.50 USD'))
         self.assertEqual(result.changed, 0)
 
+    def test_run_ends_with_what_needs_a_look(self):
+        store = FakeStore([row(id=4, campaign_id=40, raised=Decimal('16000')), row(id=5, campaign_id=50),
+                           row(id=6, campaign_id=60, consecutive_failures=2), row(id=7, campaign_id=None)])
+        _, lines = self.run_sync(store, [fixture('gofundme_ok.html'), fixture('gofundme_ok.html'),
+                                         http_error(404), http_error(404)])
+        # 7 was not found for the first time, so it is not listed yet.
+        self.assertEqual(lines[-3:], [
+            'Needs a look (2), see bfep sync problems for what to do:',
+            '  4 suspicious_drop: https://bfep.org/admin/bfep/campaign/40/fundraiser/4/edit',
+            '  6 not_found: https://bfep.org/admin/bfep/campaign/60/fundraiser/6/edit'])
+
     def test_block_stops_the_provider(self):
         store = FakeStore([row(id=1), row(id=2), row(id=3)])
         result, lines = self.run_sync(store, [fixture('gofundme_ok.html'), http_error(429)])

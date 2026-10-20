@@ -346,3 +346,24 @@ columns to `bfep_sync` and `bfep_app`, and `campaigns.line_number` to
 
 **Drop it:** Revert this commit; the columns can stay (nothing else reads
 them), or `ALTER TABLE campaign_fundraisers DROP COLUMN ...` each one.
+
+## 29. `bfep sync problems`, and a "needs a look" list at the end of a run (2026-10-20)
+
+**What:** `bfep sync problems` lists every active fundraiser whose last check
+was not ok, grouped by status (held figures first), each with what the status
+means, what to do, the stored and platform figures (or the reason), the
+campaign's line number, the page and the admin link to the fundraiser:
+
+    == suspicious_drop (1): Raised fell by more than 20%, so the new figure was not saved.
+       Compare with the fundraiser page. If the new figure is right, accept it ...
+      - line 105, fundraiser 5: stored 20,000 USD, platform shows 12,345.50 USD (-38%); 40% -> 25% of the 50,000 goal; 321 donations; not saved (checked 2026-10-20), last updated 2026-10-12
+        page: https://www.gofundme.com/f/drop
+        edit: https://bfep.org/admin/bfep/campaign/5/fundraiser/5/edit
+
+It reads only. It needs `deploy/sync-details.sql` (item 28) for the read
+grants, and says so if it hasn't been run. A run (nightly or by hand) now
+also ends with the IDs and admin links of the rows that need a look
+(held, unreadable, not found for good, bad link), so `bfep sync log` shows
+them without scrolling. `SITE_URL` changes the site in the links.
+
+**Drop it:** Revert this commit.
