@@ -227,7 +227,9 @@ class RunResult:
 def run(store, providers: list[Provider], *, apply: bool, limit: int = 0, after: str = '',
         fetch: Fetcher | None = None, retries: int = 1, out: Callable[[str], None] | None = None,
         sleep: Callable[[float], None] | None = None,
-        jitter: Callable[[], float] | None = None) -> RunResult:
+        jitter: Callable[[], float] | None = None, ids: list[int] | None = None) -> RunResult:
+    """`ids` checks only those fundraisers (active ones, even with nightly
+    sync off), with the same rules as a full run."""
     # Resolved at call time (not as default arguments) so tests can patch them.
     fetch, sleep, jitter = fetch or http_fetch, sleep or time.sleep, jitter or random.random
     # Flushed so each line shows up at once, even through a pipe or the journal.
@@ -239,7 +241,14 @@ def run(store, providers: list[Provider], *, apply: bool, limit: int = 0, after:
             active.append(p)
         else:
             out(f'{p.name}: not configured, skipped')
-    rows = store.select(active, limit)
+    if ids:
+        rows = [r for r in store.select_ids(ids) if provider_for(r.url, active)]
+        missing = sorted(set(ids) - {r.id for r in rows})
+        if missing:
+            out(f'not checked (no active fundraiser with a link an enabled platform syncs): '
+                f'{", ".join(map(str, missing))}')
+    else:
+        rows = store.select(active, limit)
     out(('APPLYING' if apply else 'DRY RUN') + f': {len(rows)} campaigns')
     for p in active:
         urls = [u for row in rows if provider_for(row.url, active) is p and (u := p.normalize(row.url))]

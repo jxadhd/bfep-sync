@@ -1,6 +1,8 @@
 """Fundraiser figure sync. Dry run unless --apply is given.
 
     python -m bfep_sync [--apply] [--limit N] [--after CMD] [--provider NAMES]
+    python -m bfep_sync --id ID ...      check only these fundraisers (dry run unless --apply)
+    python -m bfep_sync --line N ...     check only these campaigns' active fundraisers
     python -m bfep_sync --problems       list fundraisers the sync could not update
     python -m bfep_sync --accept ID ...  save what the platform shows now, even a drop
 
@@ -52,6 +54,10 @@ def main(argv: list[str] | None = None) -> int:
                     help='retries for network errors and HTTP 5xx per campaign (default 1; 0 = original behaviour)')
     ap.add_argument('--problems', action='store_true',
                     help='list the fundraisers whose last check was not ok, with what to do (reads only)')
+    ap.add_argument('--id', type=int, nargs='+', metavar='ID', dest='ids',
+                    help='check only these fundraisers, with the usual rules (a dry run unless --apply)')
+    ap.add_argument('--line', type=int, nargs='+', metavar='N', dest='lines',
+                    help="check only the active fundraisers of the campaigns with these line numbers")
     ap.add_argument('--accept', type=int, nargs='+', metavar='ID',
                     help='check these fundraisers again and save what their platforms show, even a big drop')
     args = ap.parse_args(argv)
@@ -82,8 +88,20 @@ def main(argv: list[str] | None = None) -> int:
     if args.accept:
         from .runner import accept
         return accept(store, providers, args.accept, after=args.after)
+    ids = list(args.ids or [])
+    if args.lines:
+        import psycopg2
+        try:
+            found = store.ids_for_lines(args.lines)
+        except psycopg2.errors.InsufficientPrivilege:
+            print('--line needs deploy/sync-details.sql (it lets the sync read line numbers)', file=sys.stderr)
+            return 4
+        if not found:
+            print(f'no active fundraisers on line {", ".join(map(str, args.lines))}', file=sys.stderr)
+            return 4
+        ids += [i for i in found if i not in ids]
     result = run(store, providers, apply=args.apply, limit=args.limit, after=args.after,
-                 retries=max(0, args.retries))
+                 retries=max(0, args.retries), ids=ids)
     return result.exit_code
 
 

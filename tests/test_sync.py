@@ -480,6 +480,16 @@ class RunTest(unittest.TestCase):
         self.assertTrue(detail.startswith('stored 16,000 USD, platform shows 12,345.50 USD'))
         self.assertEqual(result.changed, 0)
 
+    def test_only_the_given_ids(self):
+        store = FakeStore([row(id=1), row(id=2, raised=Decimal('16000')), row(id=3, url='https://example.org/x')])
+        lines = []
+        run(store, [pages_only()], apply=True, fetch=FakeFetch(fixture('gofundme_ok.html')), retries=0,
+            out=lines.append, sleep=lambda s: None, jitter=lambda: 0, ids=[2, 3, 9])
+        self.assertEqual(lines[0], 'not checked (no active fundraiser with a link an enabled platform syncs): 3, 9')
+        self.assertEqual(lines[1], 'APPLYING: 1 campaigns')
+        self.assertTrue(lines[2].startswith('2: suspicious_drop'))
+        self.assertEqual(store.written, [(2, 'suspicious_drop', 0)])
+
     def test_run_ends_with_what_needs_a_look(self):
         store = FakeStore([row(id=4, campaign_id=40, raised=Decimal('16000')), row(id=5, campaign_id=50),
                            row(id=6, campaign_id=60, consecutive_failures=2), row(id=7, campaign_id=None)])

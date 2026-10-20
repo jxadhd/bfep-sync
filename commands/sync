@@ -2,6 +2,8 @@
 # sync: run, check, deploy or roll back the fundraiser figure sync
 #
 # Usage:  bfep sync [--apply] [--limit N] [...]  run the sync now (a dry run unless --apply)
+#         bfep sync --id ID [ID...] [--apply]    check only those fundraisers (same rules)
+#         bfep sync --line N [N...] [--apply]    check only those campaigns' active fundraisers
 #         bfep sync status                       deployed version, timer, last run
 #         bfep sync problems                     fundraisers the sync could not update, what
 #                                                each status means, and where to fix them
@@ -43,7 +45,7 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 # For typo hints. The options are bfep_sync's own (python3 sync.py --help).
 COMMAND_HINTS=()
-for c in status problems accept log test deploy rollback help --apply --limit --after --provider --retries --help; do
+for c in status problems accept log --id --line test deploy rollback help --apply --limit --after --provider --retries --help; do
   COMMAND_HINTS+=("$c|bfep sync $c")
 done
 

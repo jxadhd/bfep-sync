@@ -409,3 +409,15 @@ status for these rows (and says so) instead of stopping.
 **Do once:** run `deploy/sync-details.sql` again as `data` (safe to repeat).
 
 **Drop it:** Revert this commit.
+
+## 33. `bfep sync --id` and `--line` (2026-10-20)
+
+**What:** `bfep sync --id 2149` (or several IDs) checks only those
+fundraisers with the usual rules and output, a dry run unless `--apply`.
+Useful to try a fix on one fundraiser. It also checks fundraisers whose
+nightly sync is off; IDs that are inactive, unknown or on a platform that
+isn't enabled are listed as not checked. `bfep sync --line 412` does the
+same for every active fundraiser of the campaign on line 412 (it reads
+`campaigns.line_number`, granted by `deploy/sync-details.sql`).
+
+**Drop it:** Revert this commit.
