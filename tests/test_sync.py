@@ -27,7 +27,7 @@ from bfep_sync.providers.justgiving import JustGiving, parse_justgiving  # noqa:
 from bfep_sync.providers.paypal import PayPal, parse_paypal  # noqa: E402
 from bfep_sync.providers.spotfund import Spotfund, parse_spotfund  # noqa: E402
 from bfep_sync.providers.steunactie import Steunactie, parse_steunactie  # noqa: E402
-from bfep_sync.runner import Row, check, run, shown_status  # noqa: E402
+from bfep_sync.runner import Row, accept, check, describe_held, run, shown_status  # noqa: E402
 
 FIXTURES = ROOT / 'tests' / 'fixtures'
 
@@ -342,6 +342,13 @@ class CheckRulesTest(unittest.TestCase):
         # 12345.5 is above 80% of 15000 (12000).
         self.assertEqual(self.outcome(row(raised=Decimal('15000')), self.ok).status, 'ok')
 
+    def test_held_outcomes_keep_what_the_platform_showed(self):
+        o = self.outcome(row(raised=Decimal('16000')), self.ok)
+        self.assertTrue(o.held)
+        self.assertEqual(o.figures.raised, Decimal('12345.5'))
+        self.assertFalse(self.outcome(row(), http_error(404)).held)
+        self.assertFalse(self.outcome(row(), self.ok).held)
+
     def test_not_found_threshold(self):
         o = self.outcome(row(), http_error(404))
         self.assertEqual(shown_status(o, 0), ('not_found_pending', 1))
@@ -349,6 +356,52 @@ class CheckRulesTest(unittest.TestCase):
         self.assertEqual(shown_status(o, 2), ('not_found', 3))
         err = self.outcome(row(), http_error(502))
         self.assertEqual(shown_status(err, 2), ('http_502', 2))
+
+
+class DescribeHeldTest(unittest.TestCase):
+
+    def test_drop_shows_both_figures_change_and_progress(self):
+        r = row(raised=Decimal('5000'), goal=Decimal('10000'))
+        note = describe_held(r, Figures(Decimal('1200'), Decimal('10000'), 'USD', 31))
+        self.assertEqual(note, 'stored 5,000 USD, platform shows 1,200 USD (-76%); '
+                               '50% -> 12% of the 10,000 goal; 31 donations; not saved')
+
+    def test_new_goal_and_other_currency(self):
+        r = row(raised=Decimal('5000'), goal=Decimal('10000'), currency_code='EUR')
+        note = describe_held(r, Figures(Decimal('99.5'), Decimal('20000'), 'USD'))
+        self.assertEqual(note, 'stored 5,000 EUR, platform shows 99.50 USD; '
+                               '50% -> 0% of the 20,000 goal (stored goal 10,000); not saved')
+
+    def test_no_goal(self):
+        r = row(raised=Decimal('5000'), goal=None)
+        self.assertEqual(describe_held(r, Figures(Decimal('10'), None, 'USD')),
+                         'stored 5,000 USD, platform shows 10 USD (-100%); not saved')
+
+
+class AcceptTest(unittest.TestCase):
+
+    def accept(self, store, ids, *responses):
+        lines = []
+        code = accept(store, [pages_only()], ids, fetch=FakeFetch(*responses),
+                      out=lines.append, sleep=lambda s: None)
+        return code, lines
+
+    def test_saves_a_drop(self):
+        store = FakeStore([row(id=4, raised=Decimal('16000'))])
+        code, lines = self.accept(store, [4], fixture('gofundme_ok.html'))
+        self.assertEqual((code, store.written), (0, [(4, 'ok', Decimal('12345.5'))]))
+        self.assertEqual(lines, ['4: saved, raised 16000 -> 12345.5'])
+
+    def test_says_why_it_could_not(self):
+        store = FakeStore([row(id=4), row(id=5, url='https://example.org/x'), row(id=6)])
+        code, lines = self.accept(store, [4, 5, 6, 9], http_error(404), fixture('gofundme_no_next_data.html'))
+        self.assertEqual(code, 1)
+        self.assertEqual(store.written, [])
+        self.assertEqual(lines, [
+            '4: not saved, not_found; see bfep sync problems',
+            '5: not saved, the sync does not read this link: https://example.org/x',
+            '6: not saved, parse_error (no __NEXT_DATA__ block); see bfep sync problems',
+            '9: not saved, no active fundraiser with this ID'])
 
 
 class RetryTest(unittest.TestCase):
@@ -376,11 +429,16 @@ class FakeStore:
         rows = [r for r in self.rows if any(p.matches(r.url) or p.url_pattern for p in providers)]
         return rows[:limit] if limit else rows
 
+    def select_ids(self, ids):
+        return [r for r in self.rows if r.id in ids]
+
     def record_ok(self, rid, fig):
         self.written.append((rid, 'ok', fig.raised))
 
-    def record_problem(self, rid, status, failures):
+    def record_problem(self, rid, status, failures, fig=None, detail=''):
         self.written.append((rid, status, failures))
+        self.details = getattr(self, 'details', {})
+        self.details[rid] = (fig, detail)
 
 
 class RunTest(unittest.TestCase):
@@ -410,6 +468,28 @@ class RunTest(unittest.TestCase):
         self.assertEqual(lines[1:3], ['1: not_found', '2: not_found, sync would be turned off'])
         _, lines = self.run_sync(store, [http_error(404), http_error(404)])
         self.assertEqual(lines[2], '2: not_found, sync turned off')
+
+    def test_held_line_says_what_the_platform_showed(self):
+        store = FakeStore([row(id=4, raised=Decimal('16000'), goal=Decimal('50000'))])
+        result, lines = self.run_sync(store, [fixture('gofundme_ok.html')])
+        self.assertEqual(lines[1], '4: suspicious_drop, stored 16,000 USD, platform shows 12,345.50 USD (-23%); '
+                                   '32% -> 25% of the 50,000 goal; 321 donations; not saved')
+        self.assertEqual(store.written, [(4, 'suspicious_drop', 0)])
+        fig, detail = store.details[4]
+        self.assertEqual(fig.raised, Decimal('12345.5'))
+        self.assertTrue(detail.startswith('stored 16,000 USD, platform shows 12,345.50 USD'))
+        self.assertEqual(result.changed, 0)
+
+    def test_run_ends_with_what_needs_a_look(self):
+        store = FakeStore([row(id=4, campaign_id=40, raised=Decimal('16000')), row(id=5, campaign_id=50),
+                           row(id=6, campaign_id=60, consecutive_failures=2), row(id=7, campaign_id=None)])
+        _, lines = self.run_sync(store, [fixture('gofundme_ok.html'), fixture('gofundme_ok.html'),
+                                         http_error(404), http_error(404)])
+        # 7 was not found for the first time, so it is not listed yet.
+        self.assertEqual(lines[-3:], [
+            'Needs a look (2), see bfep sync problems for what to do:',
+            '  4 suspicious_drop: https://bfep.org/admin/bfep/campaign/40/fundraiser/4/edit',
+            '  6 not_found: https://bfep.org/admin/bfep/campaign/60/fundraiser/6/edit'])
 
     def test_block_stops_the_provider(self):
         store = FakeStore([row(id=1), row(id=2), row(id=3)])

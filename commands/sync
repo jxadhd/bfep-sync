@@ -3,6 +3,11 @@
 #
 # Usage:  bfep sync [--apply] [--limit N] [...]  run the sync now (a dry run unless --apply)
 #         bfep sync status                       deployed version, timer, last run
+#         bfep sync problems                     fundraisers the sync could not update, what
+#                                                each status means, and where to fix them
+#         bfep sync accept ID [ID...]            check those fundraisers again and save what
+#                                                the platform shows now, even a big drop (for
+#                                                held figures you have checked on the page)
 #         bfep sync log [N] [--since WHEN|--all]  the last N lines of its log (default 50)
 #                                                from the last 24 hours; WHEN is e.g. 3d,
 #                                                12h or 2026-10-01; --all searches it all
@@ -38,7 +43,7 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 # For typo hints. The options are bfep_sync's own (python3 sync.py --help).
 COMMAND_HINTS=()
-for c in status log test deploy rollback help --apply --limit --after --provider --retries --help; do
+for c in status problems accept log test deploy rollback help --apply --limit --after --provider --retries --help; do
   COMMAND_HINTS+=("$c|bfep sync $c")
 done
 
@@ -70,6 +75,22 @@ run() {
     fi
   done
   BFEP_SYNC_PROG="bfep sync" exec "$PY" sync.py "$@"
+}
+
+# Clears the site's cached campaign pages after accept saves a figure, as the
+# timer's --after does after a nightly run. SYNC_AFTER= turns it off.
+SYNC_AFTER="${SYNC_AFTER-docker exec -u www-data -w /opt/drupal drupal vendor/bin/drush cache:tag bfep:campaigns}"
+
+accept() {
+  [[ $# -gt 0 ]] || usage_error sync "accept needs the fundraiser IDs, e.g. bfep sync accept 1234 5678 (bfep sync problems lists them)"
+  local id
+  for id in "$@"; do
+    [[ "$id" =~ ^[0-9]+$ ]] || usage_error sync "not a fundraiser ID: '$id'"
+  done
+  load_env
+  cd "$LIVE"
+  hold_run_lock
+  BFEP_SYNC_PROG="bfep sync" exec "$PY" sync.py --accept "$@" --after "$SYNC_AFTER"
 }
 
 status() {
@@ -195,6 +216,8 @@ no_args() { [[ $# -le 1 ]] || usage_error sync "$1 takes no arguments, got: ${*:
 
 case "${1:-}" in
   status) no_args "$@"; status ;;
+  accept) shift; accept "$@" ;;
+  problems) no_args "$@"; load_env; cd "$LIVE"; BFEP_SYNC_PROG="bfep sync" exec "$PY" sync.py --problems ;;
   log) shift; show_log "$@" ;;
   test) no_args "$@"; cd "$LIVE" && exec "$PY" -m unittest discover -s tests ;;
   deploy) shift; deploy "$@" ;;

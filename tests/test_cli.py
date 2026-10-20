@@ -153,6 +153,15 @@ class BfepCommandTest(unittest.TestCase):
         self.assertEqual(r.returncode, 4, r.stdout + r.stderr)
         self.assertIn('did you mean steunactie?', r.stderr)
 
+    def test_accept_needs_fundraiser_ids(self):
+        for args, message in ((('sync', 'accept'), 'accept needs the fundraiser IDs'),
+                              (('sync', 'accept', '12', 'line5'), "not a fundraiser ID: 'line5'")):
+            with self.subTest(args=args):
+                r = self.bfep(*args)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn(message, r.stderr)
+        self.assertIn('Did you mean: bfep sync accept', self.bfep('sync', 'acept').stderr)
+
     # bfep sync log
 
     def test_log_searches_the_last_day_unless_told_otherwise(self):

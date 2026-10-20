@@ -1,6 +1,8 @@
 """Fundraiser figure sync. Dry run unless --apply is given.
 
     python -m bfep_sync [--apply] [--limit N] [--after CMD] [--provider NAMES]
+    python -m bfep_sync --problems       list fundraisers the sync could not update
+    python -m bfep_sync --accept ID ...  save what the platform shows now, even a drop
 
 Exit codes: 0 ok, 2 a platform blocked us (403/429), 3 another applying run is
 in progress, 4 bad configuration, 5 the database could not be reached.
@@ -48,6 +50,10 @@ def main(argv: list[str] | None = None) -> int:
                     help='comma-separated providers to run (default: $SYNC_PROVIDERS or "gofundme")')
     ap.add_argument('--retries', type=int, default=1,
                     help='retries for network errors and HTTP 5xx per campaign (default 1; 0 = original behaviour)')
+    ap.add_argument('--problems', action='store_true',
+                    help='list the fundraisers whose last check was not ok, with what to do (reads only)')
+    ap.add_argument('--accept', type=int, nargs='+', metavar='ID',
+                    help='check these fundraisers again and save what their platforms show, even a big drop')
     args = ap.parse_args(argv)
 
     try:
@@ -62,14 +68,20 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as e:  # psycopg2.OperationalError, missing psycopg2, bad settings
         print(f'database connection failed: {str(e).strip()}', file=sys.stderr)
         return 5
+    if args.problems:
+        from .repair import list_problems
+        return list_problems(store.conn)
     # Only writing runs need to exclude each other. A dry run takes no lock, so
     # it can't make the timer skip a cycle.
-    if args.apply:
+    if args.apply or args.accept:
         try:
             store.lock()
         except AlreadyRunning as e:
             print(str(e), file=sys.stderr)
             return 3
+    if args.accept:
+        from .runner import accept
+        return accept(store, providers, args.accept, after=args.after)
     result = run(store, providers, apply=args.apply, limit=args.limit, after=args.after,
                  retries=max(0, args.retries))
     return result.exit_code

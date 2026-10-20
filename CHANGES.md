@@ -309,6 +309,76 @@ pages as before; paste the line in the thread.
 **Drop it:** `GOFUNDME_API=0` in `/etc/bfep-sync.env` turns it off without a
 deploy; or revert this commit.
 
+## 27. Held lines say what the platform showed (2026-10-20)
+
+**What:** A held fundraiser used to print only `1234: suspicious_drop`, so
+there was nothing to compare with, and the stored figures looked unchanged
+because a held figure is never saved. Held lines (`suspicious_drop`, and
+`currency_mismatch` with `SYNC_HOLD_CURRENCY=1`) now print the stored and the
+platform's figures, the change, how far along the goal each is, and the
+donation count, e.g.
+
+    1234: suspicious_drop, stored 5,000 USD, platform shows 1,200 USD (-76%); 50% -> 12% of the 10,000 goal; 31 donations; not saved
+
+The percentages make the figure checkable on platforms whose page shows only
+a percentage (some Chuffed pages). The rules for what is held are unchanged;
+the held figures are still not written.
+
+**Drop it:** Revert this commit.
+
+## 28. Keep what the platform showed, and why a row was not updated (2026-10-20)
+
+**What:** New columns on `campaign_fundraisers`, added by
+`deploy/sync-details.sql`: `platform_raised`, `platform_goal`,
+`platform_currency`, `platform_donations`, `platform_checked_at` (what the
+platform last showed, written even when the figure was held) and
+`sync_detail` (why the last check did not update the row: the held line from
+item 27, or a parse error's reason; empty after a normal update). The website
+uses them to show a held figure next to the stored one and to accept it
+(website PR), and `bfep sync problems` / `bfep sync accept` use them too.
+
+The sync checks at start that the columns exist and that its user may update
+them. Until the script is run it works exactly as before.
+
+**Do once:** run `deploy/sync-details.sql` as `data` (it also grants the
+columns to `bfep_sync` and `bfep_app`, and `campaigns.line_number` to
+`bfep_sync`). Safe to run twice.
+
+**Drop it:** Revert this commit; the columns can stay (nothing else reads
+them), or `ALTER TABLE campaign_fundraisers DROP COLUMN ...` each one.
+
+## 29. `bfep sync problems`, and a "needs a look" list at the end of a run (2026-10-20)
+
+**What:** `bfep sync problems` lists every active fundraiser whose last check
+was not ok, grouped by status (held figures first), each with what the status
+means, what to do, the stored and platform figures (or the reason), the
+campaign's line number, the page and the admin link to the fundraiser:
+
+    == suspicious_drop (1): Raised fell by more than 20%, so the new figure was not saved.
+       Compare with the fundraiser page. If the new figure is right, accept it ...
+      - line 105, fundraiser 5: stored 20,000 USD, platform shows 12,345.50 USD (-38%); 40% -> 25% of the 50,000 goal; 321 donations; not saved (checked 2026-10-20), last updated 2026-10-12
+        page: https://www.gofundme.com/f/drop
+        edit: https://bfep.org/admin/bfep/campaign/5/fundraiser/5/edit
+
+It reads only. It needs `deploy/sync-details.sql` (item 28) for the read
+grants, and says so if it hasn't been run. A run (nightly or by hand) now
+also ends with the IDs and admin links of the rows that need a look
+(held, unreadable, not found for good, bad link), so `bfep sync log` shows
+them without scrolling. `SITE_URL` changes the site in the links.
+
+**Drop it:** Revert this commit.
+
+## 30. `bfep sync accept` (2026-10-20)
+
+**What:** A held figure stayed held every night until someone typed the new
+amount in by hand. `bfep sync accept 1234 5678` checks those fundraisers
+again now and saves what their platforms show, even a drop of more than 20%
+or a new currency, then clears the site's cached campaign pages (the same
+`drush cache:tag bfep:campaigns` as the timer; `SYNC_AFTER=` skips it). It
+takes the run lock, works on any active fundraiser (also ones whose nightly
+sync is off) and says per ID why it could not save (page not found,
+unreadable, a link the sync doesn't read, no such fundraiser). Exit 0 when
+every ID was saved, 1 otherwise. No new grants needed.
 ## 27. Progress lines while GoFundMe prepares (2026-10-20)
 
 **What:** Before the first row, the GoFundMe provider looks up every gofund.me

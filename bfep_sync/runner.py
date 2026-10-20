@@ -21,6 +21,10 @@ stated currency is now adopted (see below):
   currency with a different goal -> 'currency_mismatch' (the same goal under
   another label means the stored label is wrong, so it is adopted)
 * raised fell by more than DROP_LIMIT -> 'suspicious_drop' (held)
+
+A held outcome ('suspicious_drop', 'currency_mismatch') still carries the
+figures the platform showed, so the run can say what was held; they are
+never written over the stored figures.
 """
 from __future__ import annotations
 
@@ -37,6 +41,7 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Callable, Iterable
 
+from . import repair
 from .providers import Blocked, Fetcher, Figures, NotConfigured, ParseError, Provider
 
 UA = 'TBEPSync/1.0 (+https://bfep.org)'
@@ -62,6 +67,7 @@ class Row:
     goal: Decimal | None
     raised: Decimal | None
     consecutive_failures: int
+    campaign_id: int | None = None
 
 
 @dataclass
@@ -69,7 +75,12 @@ class Outcome:
     status: str
     figures: Figures | None
     failed: bool
-    detail: str = ''   # why, for parse_error and error; printed, never stored
+    detail: str = ''   # why, for parse_error and error
+
+    @property
+    def held(self) -> bool:
+        """The platform answered, but the figures were not saved."""
+        return self.status != 'ok' and self.figures is not None
 
 
 def provider_for(url: str | None, providers: Iterable[Provider]) -> Provider | None:
@@ -104,7 +115,9 @@ def fetch_with_retry(provider: Provider, url: str, fetch: Fetcher, retries: int,
 
 
 def check(provider: Provider, row: Row, fetch: Fetcher, retries: int = 0,
-          sleep: Callable[[float], None] | None = None) -> Outcome:
+          sleep: Callable[[float], None] | None = None, accept: bool = False) -> Outcome:
+    """`accept` takes whatever the platform shows: no drop or currency hold
+    (bfep sync accept, after someone has checked the page)."""
     sleep = sleep or time.sleep
     u = provider.normalize(row.url)
     if u is None:
@@ -130,17 +143,19 @@ def check(provider: Provider, row: Row, fetch: Fetcher, retries: int = 0,
         if code not in DOLLAR_CODES:
             return Outcome('currency_unknown', None, False)
         fig = replace(fig, currency=code)
+    if accept:
+        return Outcome('ok', fig, False)
     if os.environ.get('SYNC_HOLD_CURRENCY') == '1':
         if not code:
             if raised:
                 return Outcome('currency_unknown', None, False)
         elif fig.currency != code:
             if goal is None or fig.goal != goal:
-                return Outcome('currency_mismatch', None, False)
+                return Outcome('currency_mismatch', fig, False)
     elif fig.currency != code:
         return Outcome('ok', fig, False)    # adopted; the run prints a CURRENCY line
     if raised and raised > 0 and fig.raised < raised * (1 - DROP_LIMIT):
-        return Outcome('suspicious_drop', None, False)
+        return Outcome('suspicious_drop', fig, False)
     return Outcome('ok', fig, False)
 
 
@@ -160,6 +175,41 @@ def describe_ok(row: Row, fig: Figures) -> tuple[str, bool]:
         note += f', goal {row.goal} -> {fig.goal}'
     changed = cur_changed or fig.raised != row.raised or (fig.goal is not None and fig.goal != row.goal)
     return note, changed
+
+
+def money(amount: Decimal | None) -> str:
+    """1234.5 -> '1,234.50', 1200 -> '1,200'."""
+    if amount is None:
+        return 'none'
+    return f'{amount:,.0f}' if amount == amount.to_integral_value() else f'{amount:,.2f}'
+
+
+def percent(raised: Decimal | None, goal: Decimal | None) -> str | None:
+    if raised is None or not goal or goal <= 0:
+        return None
+    return f'{raised / goal * 100:.0f}%'
+
+
+def describe_held(row: Row, fig: Figures) -> str:
+    """What the platform showed against what is stored, for a held outcome.
+
+    The percentages let staff check a platform page that shows only how far
+    along the goal a fundraiser is (some Chuffed pages show nothing else).
+    """
+    stored_ccy = (row.currency_code or '').strip() or '?'
+    note = f'stored {money(row.raised)} {stored_ccy}, platform shows {money(fig.raised)} {fig.currency or stored_ccy}'
+    if row.raised and row.raised > 0 and fig.currency in (None, stored_ccy):
+        change = (fig.raised - row.raised) / row.raised * 100
+        note += f' ({change:+.0f}%)'
+    old_pct, new_pct = percent(row.raised, row.goal), percent(fig.raised, fig.goal if fig.goal is not None else row.goal)
+    if old_pct or new_pct:
+        goal = fig.goal if fig.goal is not None else row.goal
+        note += f'; {old_pct or "?"} -> {new_pct or "?"} of the {money(goal)} goal'
+    if fig.goal is not None and row.goal is not None and fig.goal != row.goal:
+        note += f' (stored goal {money(row.goal)})'
+    if fig.donations is not None:
+        note += f'; {fig.donations} donations'
+    return note + '; not saved'
 
 
 @dataclass
@@ -199,6 +249,7 @@ def run(store, providers: list[Provider], *, apply: bool, limit: int = 0, after:
                 out(f'{p.name}: batch fetch failed ({type(e).__name__}: {e}), fetching one at a time')
 
     blocked: set[str] = set()
+    attention: list[str] = []
     for row in rows:
         provider = provider_for(row.url, active)
         if provider is None or provider.name in blocked:
@@ -220,20 +271,70 @@ def run(store, providers: list[Provider], *, apply: bool, limit: int = 0, after:
             if changed:
                 result.changed += 1
         else:
+            why = describe_held(row, outcome.figures) if outcome.held else outcome.detail
             note = f' ({outcome.detail})' if outcome.detail else ''
-            if shown_status(outcome, row.consecutive_failures)[0] == 'not_found':
+            if outcome.held:
+                note += ', ' + why
+            shown = shown_status(outcome, row.consecutive_failures)[0]
+            if shown == 'not_found':
                 note += ', sync turned off' if apply else ', sync would be turned off'
             out(f'{row.id}: {outcome.status}{note}')
+            if shown in repair.ATTENTION:
+                attention.append(f'{row.id} {shown}: {repair.fix_link(row.campaign_id, row.id)}')
         if apply:
             if outcome.status == 'ok':
                 store.record_ok(row.id, outcome.figures)
             else:
-                store.record_problem(row.id, *shown_status(outcome, row.consecutive_failures))
+                store.record_problem(row.id, *shown_status(outcome, row.consecutive_failures),
+                                     outcome.figures, why)
         # A provider with delay 0 paces its own requests (see Chuffed).
         if provider.delay and provider.normalize(row.url) is not None:
             sleep(provider.delay + jitter() * 2)
 
     out(f'{dict(result.counts)} | changed: {result.changed}')
+    if attention:
+        out(f'Needs a look ({len(attention)}), see bfep sync problems for what to do:')
+        for line in attention:
+            out(f'  {line}')
     if apply and result.changed and after:
         subprocess.run(shlex.split(after), check=False)
     return result
+
+
+def accept(store, providers: list[Provider], ids: list[int], *, after: str = '',
+           fetch: Fetcher | None = None, out: Callable[[str], None] = print,
+           sleep: Callable[[float], None] | None = None) -> int:
+    """Checks the named fundraisers again and saves what their platforms show
+    now, even when it is a big drop. For held figures someone has checked.
+
+    Returns 0 when every one was saved, 1 otherwise.
+    """
+    fetch, sleep = fetch or http_fetch, sleep or time.sleep
+    active = [p for p in providers if p.configured()]
+    rows = {r.id: r for r in store.select_ids(ids)}
+    saved = 0
+    for rid in ids:
+        row = rows.get(rid)
+        if row is None:
+            out(f'{rid}: not saved, no active fundraiser with this ID')
+            continue
+        provider = provider_for(row.url, active)
+        if provider is None:
+            out(f'{rid}: not saved, the sync does not read this link: {row.url}')
+            continue
+        try:
+            outcome = check(provider, row, fetch, 1, sleep, accept=True)
+        except Blocked as e:
+            out(f'{rid}: not saved, {provider.name} refused the request (HTTP {e}); try again later')
+            continue
+        if outcome.status != 'ok':
+            note = f' ({outcome.detail})' if outcome.detail else ''
+            out(f'{rid}: not saved, {outcome.status}{note}; see bfep sync problems')
+            continue
+        note, _ = describe_ok(row, outcome.figures)
+        store.record_ok(rid, outcome.figures)
+        saved += 1
+        out(f'{rid}: saved, {note}')
+    if saved and after:
+        subprocess.run(shlex.split(after), check=False)
+    return 0 if saved == len(ids) else 1
