@@ -379,5 +379,13 @@ takes the run lock, works on any active fundraiser (also ones whose nightly
 sync is off) and says per ID why it could not save (page not found,
 unreadable, a link the sync doesn't read, no such fundraiser). Exit 0 when
 every ID was saved, 1 otherwise. No new grants needed.
+## 27. Progress lines while GoFundMe prepares (2026-10-20)
+
+**What:** Before the first row, the GoFundMe provider looks up every gofund.me
+short link (2 s each, about 20 minutes for ~600) and then asks the API, which
+printed nothing and looked stuck. It now prints `looking up N gofund.me short
+links (about M min)`, a line every 100 links, and `asking the API about N
+fundraisers`. Every output line is also flushed at once, so it shows up live
+through a pipe or `tee` too.
 
 **Drop it:** Revert this commit.

@@ -169,8 +169,17 @@ class GoFundMe(Provider):
                 self.sleep(interval - gap)
         self._last = self.clock()
 
+    def _note(self, line: str) -> None:
+        if self.log:
+            self.log(f'{self.name}: {line}')
+
     def _resolve_short_links(self, urls: list[str]) -> None:
-        for u in urls:
+        if urls:
+            self._note(f'looking up {len(urls)} gofund.me short links '
+                       f'(about {max(1, round(len(urls) * API_INTERVAL / 60))} min)')
+        for n, u in enumerate(urls, 1):
+            if n % 100 == 0:
+                self._note(f'{n} of {len(urls)} short links looked up')
             self._wait_turn(API_INTERVAL)
             try:
                 slug = _slug(self.resolve(u))
@@ -184,6 +193,8 @@ class GoFundMe(Provider):
                 self._slugs[u] = slug
 
     def _ask_api(self, slugs: list[str], fetch: Fetcher) -> None:
+        if slugs:
+            self._note(f'asking the API about {len(slugs)} fundraisers')
         empty = 0
         for start in range(0, len(slugs), BATCH):
             chunk = slugs[start:start + BATCH]
