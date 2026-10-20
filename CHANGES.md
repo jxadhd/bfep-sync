@@ -389,3 +389,23 @@ fundraisers`. Every output line is also flushed at once, so it shows up live
 through a pipe or `tee` too.
 
 **Drop it:** Revert this commit.
+
+## 32. Chuffed campaigns that hide their totals (2026-10-20)
+
+**What:** A Chuffed organiser can hide a campaign's figures; the page then
+shows only a percentage, and the API answers a goal and raised amount of 0
+(fundraiser 826: 0 of 0 EUR with 331 donations). The sync read that as a drop
+to 0 and held it as `suspicious_drop` every night. A goal and raised of 0
+with donations is now the status `hidden_totals`: not a failure, nothing is
+saved over the staff-entered figures, and the sync keeps checking, so it takes
+over again if the organiser shows the figures again. `bfep sync problems`
+explains it; the website's fundraiser form has a box for the percentage the
+page shows (website PR). The API has no percentage, so staff enter it.
+
+Where `sync_status` is an enum, `deploy/sync-details.sql` now adds the
+`hidden_totals` label; until it has been run again the sync records no
+status for these rows (and says so) instead of stopping.
+
+**Do once:** run `deploy/sync-details.sql` again as `data` (safe to repeat).
+
+**Drop it:** Revert this commit.

@@ -23,6 +23,11 @@ the link has no number (chuffed.org/project/babygharam). The API answers
 cents. A campaign the API doesn't know comes back as null (with an "Invalid
 query" error) and is treated like a 404 page, so the usual not_found rule
 applies.
+
+An organiser can hide a campaign's figures; its page then shows only a
+percentage, and the API answers a goal and raised amount of 0 (fundraiser
+826, 2026-10-20: 0 of 0 EUR with 331 donations). Zero for both with
+donations is reported as TotalsHidden, never as a drop to 0.
 """
 from __future__ import annotations
 
@@ -36,7 +41,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Callable
 from urllib.parse import urlparse
 
-from .base import Fetcher, Figures, NotConfigured, ParseError, Provider, validate_figures
+from .base import Fetcher, Figures, NotConfigured, ParseError, Provider, TotalsHidden, validate_figures
 
 API = 'https://chuffed.org/api/graphql'
 HOSTS = {'chuffed.org', 'www.chuffed.org'}
@@ -87,6 +92,8 @@ def campaign_figures(campaign, url: str = API) -> Figures:
         raise ParseError(f'raised in {code} but goal in {goal_code}')
     count = (campaign.get('donations') or {}).get('totalCount')
     donations = count if isinstance(count, int) else None
+    if raised == 0 and goal == 0 and donations:
+        raise TotalsHidden(f'Chuffed hides this campaign\'s totals; {donations} donations')
     validate_figures(raised, goal or None, code)
     return Figures(raised, goal or None, code, donations)
 

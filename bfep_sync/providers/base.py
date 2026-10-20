@@ -29,6 +29,11 @@ class Blocked(Exception):
     """The platform refused us (HTTP 403/429). Stop calling it this run."""
 
 
+class TotalsHidden(Exception):
+    """The platform answered but hides this fundraiser's figures (its
+    organiser chose to), so there is nothing to compare or save."""
+
+
 class NotConfigured(Exception):
     """The provider needs settings (for example an API key) that are missing."""
 

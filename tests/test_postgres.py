@@ -371,6 +371,27 @@ class SyncDetailsTest(PostgresTestCase):
         self.assertEqual(code, 4)
         self.assertIn('run deploy/sync-details.sql', out)
 
+    def test_enum_status_gets_hidden_totals(self):
+        conn = self.connect()
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute('SET ROLE data')
+            cur.execute("CREATE TYPE sync_status AS ENUM ('ok', 'suspicious_drop', 'not_found_pending')")
+            cur.execute('ALTER TABLE campaign_fundraisers ALTER COLUMN sync_status TYPE sync_status '
+                        'USING sync_status::sync_status')
+        store = self.store()
+        store.record_problem(1, 'hidden_totals', 0)      # no such label yet: no status, no crash
+        self.assertIsNone(self.table()[1][3])
+        self.add_details()
+        store.record_problem(1, 'hidden_totals', 0)
+        self.assertEqual(self.table()[1][3], 'hidden_totals')
+        store.conn.close()
+        conn.close()
+
+    def store(self):
+        from bfep_sync.store import PostgresStore
+        return PostgresStore(self.connect(user='bfep_sync', password='bfep_sync_test'))
+
     def test_without_the_script_nothing_changes(self):
         code, out, err = self.run_new('--apply')
         self.assertEqual(code, 0, err)

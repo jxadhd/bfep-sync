@@ -30,6 +30,12 @@ STATUSES = {
     'invalid_url': (
         "The link isn't a fundraiser address the sync understands.",
         'Fix the link on the fundraiser.'),
+    'hidden_totals': (
+        "The platform hides this fundraiser's figures (its page shows only a percentage), "
+        'so the sync leaves the saved figures alone.',
+        'Now and then, enter raised = goal x the percentage on the page (the fundraiser form '
+        'has a box for the percentage). The sync carries on checking and takes over again if '
+        'the figures come back.'),
     'not_found_pending': (
         'The page was not found, but fewer than 3 nights running.',
         'Usually nothing yet; check the link if it looks wrong.'),

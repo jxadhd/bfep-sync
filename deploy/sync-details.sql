@@ -18,6 +18,21 @@ COMMENT ON COLUMN public.campaign_fundraisers.platform_raised IS
 COMMENT ON COLUMN public.campaign_fundraisers.sync_detail IS
   'Why the sync did not update this fundraiser on its last check; empty when it did';
 
+-- Where sync_status is an enum, add the statuses newer syncs write:
+-- hidden_totals (the platform hides a fundraiser's figures, 2026-10-20).
+DO $$
+DECLARE
+  typ regtype;
+BEGIN
+  SELECT a.atttypid::regtype INTO typ
+  FROM pg_attribute a
+  JOIN pg_type t ON t.oid = a.atttypid AND t.typtype = 'e'
+  WHERE a.attrelid = 'public.campaign_fundraisers'::regclass AND a.attname = 'sync_status';
+  IF typ IS NOT NULL THEN
+    EXECUTE format('ALTER TYPE %s ADD VALUE IF NOT EXISTS %L', typ, 'hidden_totals');
+  END IF;
+END $$;
+
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'bfep_sync') THEN

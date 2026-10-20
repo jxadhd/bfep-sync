@@ -8,7 +8,7 @@ from __future__ import annotations
 import difflib
 import os
 
-from .base import Blocked, Fetcher, Figures, NotConfigured, ParseError, Provider
+from .base import Blocked, Fetcher, Figures, NotConfigured, ParseError, Provider, TotalsHidden
 from .chuffed import Chuffed
 from .gofundme import GoFundMe
 from .gogetfunding import GoGetFunding
@@ -47,6 +47,6 @@ def enabled(names: str | None = None) -> list[Provider]:
     return [PROVIDERS[n]() for n in dict.fromkeys(wanted)]
 
 
-__all__ = ['Blocked', 'Fetcher', 'Figures', 'NotConfigured', 'ParseError', 'Provider',
+__all__ = ['Blocked', 'Fetcher', 'Figures', 'NotConfigured', 'ParseError', 'Provider', 'TotalsHidden',
            'PROVIDERS', 'DEFAULT', 'enabled', 'Chuffed', 'GoFundMe', 'GoGetFunding', 'JustGiving',
            'PayPal', 'Spotfund', 'Steunactie']
