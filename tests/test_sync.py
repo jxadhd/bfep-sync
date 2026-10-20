@@ -257,8 +257,20 @@ class GoFundMeApiTest(unittest.TestCase):
         store = FakeStore([row(id=1), row(id=2, url='https://www.gofundme.com/f/other')])
         run(store, [self.provider()], apply=False, fetch=FakeFetch(gfm_batch(gfm_node(), gfm_node())),
             retries=0, out=lines.append, sleep=lambda s: None, jitter=lambda: 0)
-        self.assertEqual(lines[1], 'gofundme: API answered 2 of 2 fundraisers, the rest are read from their pages')
-        self.assertTrue(lines[2].startswith('1: ok'))
+        self.assertEqual(lines[1:3], ['gofundme: asking the API about 2 fundraisers',
+                                      'gofundme: API answered 2 of 2 fundraisers, the rest are read from their pages'])
+        self.assertTrue(lines[3].startswith('1: ok'))
+
+    def test_short_link_lookups_show_progress(self):
+        lines = []
+        urls = [f'https://gofund.me/s{n}' for n in range(250)]
+        p = self.provider(redirects={u: f'https://www.gofundme.com/f/x{n}' for n, u in enumerate(urls)})
+        p.log = lines.append
+        p.prefetch(urls, FakeFetch(*[gfm_batch(*[gfm_node()] * 20) for _ in range(13)]))
+        self.assertEqual(lines, ['gofundme: looking up 250 gofund.me short links (about 8 min)',
+                                 'gofundme: 100 of 250 short links looked up',
+                                 'gofundme: 200 of 250 short links looked up',
+                                 'gofundme: asking the API about 250 fundraisers'])
 
 
 class CheckRulesTest(unittest.TestCase):

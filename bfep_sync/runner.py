@@ -171,11 +171,13 @@ class RunResult:
 
 
 def run(store, providers: list[Provider], *, apply: bool, limit: int = 0, after: str = '',
-        fetch: Fetcher | None = None, retries: int = 1, out: Callable[[str], None] = print,
+        fetch: Fetcher | None = None, retries: int = 1, out: Callable[[str], None] | None = None,
         sleep: Callable[[float], None] | None = None,
         jitter: Callable[[], float] | None = None) -> RunResult:
     # Resolved at call time (not as default arguments) so tests can patch them.
     fetch, sleep, jitter = fetch or http_fetch, sleep or time.sleep, jitter or random.random
+    # Flushed so each line shows up at once, even through a pipe or the journal.
+    out = out or (lambda line: print(line, flush=True))
     result = RunResult()
     active = []
     for p in providers:
@@ -188,6 +190,7 @@ def run(store, providers: list[Provider], *, apply: bool, limit: int = 0, after:
     for p in active:
         urls = [u for row in rows if provider_for(row.url, active) is p and (u := p.normalize(row.url))]
         if urls:
+            p.log = out
             try:
                 note = p.prefetch(urls, fetch)
                 if note:
