@@ -366,6 +366,29 @@ class SyncDetailsTest(PostgresTestCase):
         self.assertIn('12: saved', out)                                  # auto_sync off
         self.assertIn('13: not saved, no active fundraiser', out)        # campaign deleted
 
+    def test_id_checks_only_those_rows(self):
+        before = self.table()
+        code, out, err = self.run_new('--apply', '--id', '5', '12')   # 12 has nightly sync off
+        self.assertEqual(code, 0, err)
+        printed = sorted(int(line.split(':')[0]) for line in out.splitlines() if line[:1].isdigit())
+        self.assertEqual(printed, [5, 12])
+        after = self.table()
+        self.assertEqual({k for k in after if after[k] != before[k]}, {5, 12})
+
+    def test_line_checks_that_campaigns_fundraisers(self):
+        self.add_details()
+        code, out, err = self.run_new('--line', '105', '107')     # campaigns 5 and 7
+        self.assertEqual(code, 0, err)
+        printed = sorted(int(line.split(':')[0]) for line in out.splitlines() if line[:1].isdigit())
+        self.assertEqual(printed, [5, 7])
+        code, _, err = self.run_new('--line', '999')
+        self.assertEqual((code, err.strip()), (4, 'no active fundraisers on line 999'))
+
+    def test_line_needs_the_script(self):
+        code, _, err = self.run_new('--line', '105')
+        self.assertEqual(code, 4)
+        self.assertIn('--line needs deploy/sync-details.sql', err)
+
     def test_problems_needs_the_script(self):
         code, out, _ = self.run_new('--problems')
         self.assertEqual(code, 4)

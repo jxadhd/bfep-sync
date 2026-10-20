@@ -96,6 +96,20 @@ class PostgresStore:
         self.conn.rollback()
         return rows
 
+    def ids_for_lines(self, lines: list[int]) -> list[int]:
+        """IDs of the active fundraisers of the campaigns with these line
+        numbers. Needs SELECT on campaigns.line_number (sync-details.sql)."""
+        self.cur.execute(
+            """SELECT cf.id FROM campaign_fundraisers cf
+               JOIN campaigns c ON c.id = cf.campaign_id
+               WHERE cf.is_active AND c.deleted_at IS NULL
+                 AND CAST(c.line_number AS TEXT) = ANY(%s)
+               ORDER BY cf.id""",
+            ([str(n) for n in lines],))
+        ids = [r[0] for r in self.cur.fetchall()]
+        self.conn.rollback()
+        return ids
+
     def record_ok(self, rid: int, fig: Figures) -> None:
         extra, params = self._detail_sql(fig, '')
         self.cur.execute(
