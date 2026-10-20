@@ -308,3 +308,20 @@ pages as before; paste the line in the thread.
 
 **Drop it:** `GOFUNDME_API=0` in `/etc/bfep-sync.env` turns it off without a
 deploy; or revert this commit.
+
+## 27. Held lines say what the platform showed (2026-10-20)
+
+**What:** A held fundraiser used to print only `1234: suspicious_drop`, so
+there was nothing to compare with, and the stored figures looked unchanged
+because a held figure is never saved. Held lines (`suspicious_drop`, and
+`currency_mismatch` with `SYNC_HOLD_CURRENCY=1`) now print the stored and the
+platform's figures, the change, how far along the goal each is, and the
+donation count, e.g.
+
+    1234: suspicious_drop, stored 5,000 USD, platform shows 1,200 USD (-76%); 50% -> 12% of the 10,000 goal; 31 donations; not saved
+
+The percentages make the figure checkable on platforms whose page shows only
+a percentage (some Chuffed pages). The rules for what is held are unchanged;
+the held figures are still not written.
+
+**Drop it:** Revert this commit.

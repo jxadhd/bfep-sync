@@ -13,7 +13,7 @@ LOCK_ID = 42633702
 
 SELECT = """
 SELECT cf.id, cf.url, cf.currency_code, cf.goal_amount, cf.donated_amount,
-       cf.consecutive_failures
+       cf.consecutive_failures, cf.campaign_id
 FROM campaign_fundraisers cf
 JOIN campaigns c ON c.id = cf.campaign_id
 WHERE cf.is_active AND cf.auto_sync AND c.deleted_at IS NULL

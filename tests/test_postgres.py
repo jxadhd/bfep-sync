@@ -347,6 +347,9 @@ class ParityWithOriginalTest(PostgresTestCase):
             # and say when a dead link's sync is turned off (the original kept checking it).
             new_lines = [re.sub(r'^(\d+: (?:parse_)?error) \(.*\)$', r'\1', line) for line in new_out.splitlines()]
             new_lines = [re.sub(r'^(\d+: not_found), sync turned off$', r'\1', line) for line in new_lines]
+            # Held lines add what the platform showed.
+            new_lines = [re.sub(r'^(\d+: (?:suspicious_drop|currency_mismatch)), stored .*$', r'\1', line)
+                         for line in new_lines]
             self.assertEqual(new_lines, old_out.splitlines())
         new_rows = self.table()
         self.dbname, orig = copy, self.dbname

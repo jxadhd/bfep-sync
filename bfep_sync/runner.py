@@ -21,6 +21,10 @@ stated currency is now adopted (see below):
   currency with a different goal -> 'currency_mismatch' (the same goal under
   another label means the stored label is wrong, so it is adopted)
 * raised fell by more than DROP_LIMIT -> 'suspicious_drop' (held)
+
+A held outcome ('suspicious_drop', 'currency_mismatch') still carries the
+figures the platform showed, so the run can say what was held; they are
+never written over the stored figures.
 """
 from __future__ import annotations
 
@@ -62,6 +66,7 @@ class Row:
     goal: Decimal | None
     raised: Decimal | None
     consecutive_failures: int
+    campaign_id: int | None = None
 
 
 @dataclass
@@ -70,6 +75,11 @@ class Outcome:
     figures: Figures | None
     failed: bool
     detail: str = ''   # why, for parse_error and error; printed, never stored
+
+    @property
+    def held(self) -> bool:
+        """The platform answered, but the figures were not saved."""
+        return self.status != 'ok' and self.figures is not None
 
 
 def provider_for(url: str | None, providers: Iterable[Provider]) -> Provider | None:
@@ -136,11 +146,11 @@ def check(provider: Provider, row: Row, fetch: Fetcher, retries: int = 0,
                 return Outcome('currency_unknown', None, False)
         elif fig.currency != code:
             if goal is None or fig.goal != goal:
-                return Outcome('currency_mismatch', None, False)
+                return Outcome('currency_mismatch', fig, False)
     elif fig.currency != code:
         return Outcome('ok', fig, False)    # adopted; the run prints a CURRENCY line
     if raised and raised > 0 and fig.raised < raised * (1 - DROP_LIMIT):
-        return Outcome('suspicious_drop', None, False)
+        return Outcome('suspicious_drop', fig, False)
     return Outcome('ok', fig, False)
 
 
@@ -160,6 +170,41 @@ def describe_ok(row: Row, fig: Figures) -> tuple[str, bool]:
         note += f', goal {row.goal} -> {fig.goal}'
     changed = cur_changed or fig.raised != row.raised or (fig.goal is not None and fig.goal != row.goal)
     return note, changed
+
+
+def money(amount: Decimal | None) -> str:
+    """1234.5 -> '1,234.50', 1200 -> '1,200'."""
+    if amount is None:
+        return 'none'
+    return f'{amount:,.0f}' if amount == amount.to_integral_value() else f'{amount:,.2f}'
+
+
+def percent(raised: Decimal | None, goal: Decimal | None) -> str | None:
+    if raised is None or not goal or goal <= 0:
+        return None
+    return f'{raised / goal * 100:.0f}%'
+
+
+def describe_held(row: Row, fig: Figures) -> str:
+    """What the platform showed against what is stored, for a held outcome.
+
+    The percentages let staff check a platform page that shows only how far
+    along the goal a fundraiser is (some Chuffed pages show nothing else).
+    """
+    stored_ccy = (row.currency_code or '').strip() or '?'
+    note = f'stored {money(row.raised)} {stored_ccy}, platform shows {money(fig.raised)} {fig.currency or stored_ccy}'
+    if row.raised and row.raised > 0 and fig.currency in (None, stored_ccy):
+        change = (fig.raised - row.raised) / row.raised * 100
+        note += f' ({change:+.0f}%)'
+    old_pct, new_pct = percent(row.raised, row.goal), percent(fig.raised, fig.goal if fig.goal is not None else row.goal)
+    if old_pct or new_pct:
+        goal = fig.goal if fig.goal is not None else row.goal
+        note += f'; {old_pct or "?"} -> {new_pct or "?"} of the {money(goal)} goal'
+    if fig.goal is not None and row.goal is not None and fig.goal != row.goal:
+        note += f' (stored goal {money(row.goal)})'
+    if fig.donations is not None:
+        note += f'; {fig.donations} donations'
+    return note + '; not saved'
 
 
 @dataclass
@@ -218,6 +263,8 @@ def run(store, providers: list[Provider], *, apply: bool, limit: int = 0, after:
                 result.changed += 1
         else:
             note = f' ({outcome.detail})' if outcome.detail else ''
+            if outcome.held:
+                note += ', ' + describe_held(row, outcome.figures)
             if shown_status(outcome, row.consecutive_failures)[0] == 'not_found':
                 note += ', sync turned off' if apply else ', sync would be turned off'
             out(f'{row.id}: {outcome.status}{note}')
