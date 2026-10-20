@@ -74,7 +74,7 @@ class Outcome:
     status: str
     figures: Figures | None
     failed: bool
-    detail: str = ''   # why, for parse_error and error; printed, never stored
+    detail: str = ''   # why, for parse_error and error
 
     @property
     def held(self) -> bool:
@@ -262,9 +262,10 @@ def run(store, providers: list[Provider], *, apply: bool, limit: int = 0, after:
             if changed:
                 result.changed += 1
         else:
+            why = describe_held(row, outcome.figures) if outcome.held else outcome.detail
             note = f' ({outcome.detail})' if outcome.detail else ''
             if outcome.held:
-                note += ', ' + describe_held(row, outcome.figures)
+                note += ', ' + why
             if shown_status(outcome, row.consecutive_failures)[0] == 'not_found':
                 note += ', sync turned off' if apply else ', sync would be turned off'
             out(f'{row.id}: {outcome.status}{note}')
@@ -272,7 +273,8 @@ def run(store, providers: list[Provider], *, apply: bool, limit: int = 0, after:
             if outcome.status == 'ok':
                 store.record_ok(row.id, outcome.figures)
             else:
-                store.record_problem(row.id, *shown_status(outcome, row.consecutive_failures))
+                store.record_problem(row.id, *shown_status(outcome, row.consecutive_failures),
+                                     outcome.figures, why)
         # A provider with delay 0 paces its own requests (see Chuffed).
         if provider.delay and provider.normalize(row.url) is not None:
             sleep(provider.delay + jitter() * 2)

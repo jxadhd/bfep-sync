@@ -49,6 +49,7 @@ SCHEMA = """
 CREATE TABLE campaigns (
   id serial PRIMARY KEY,
   title text NOT NULL,
+  line_number int,
   internal_notes text,
   deleted_at timestamptz
 );
@@ -138,8 +139,8 @@ class PostgresTestCase(unittest.TestCase):
             cur.execute('SET ROLE data')
             cur.execute(SCHEMA)
             for rid, url, ccy, goal, raised, active, auto, deleted in ROWS:
-                cur.execute('INSERT INTO campaigns (id, title, deleted_at) VALUES (%s, %s, %s)',
-                            (rid, f'Campaign {rid}', '2026-01-01' if deleted else None))
+                cur.execute('INSERT INTO campaigns (id, title, line_number, deleted_at) VALUES (%s, %s, %s, %s)',
+                            (rid, f'Campaign {rid}', 100 + rid, '2026-01-01' if deleted else None))
                 cur.execute(
                     """INSERT INTO campaign_fundraisers (id, campaign_id, url, currency_code,
                          goal_amount, donated_amount, is_active, auto_sync)
@@ -168,6 +169,25 @@ class PostgresTestCase(unittest.TestCase):
         with admin.cursor() as cur:
             cur.execute(f'DROP DATABASE IF EXISTS {self.dbname} WITH (FORCE)')
         admin.close()
+
+    def add_details(self):
+        """Runs deploy/sync-details.sql as the schema owner, as on the server."""
+        conn = self.connect()
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute('SET ROLE data')
+            cur.execute((ROOT / 'deploy' / 'sync-details.sql').read_text())
+        conn.close()
+
+    def details(self):
+        conn = self.connect()
+        with conn.cursor() as cur:
+            cur.execute("""SELECT id, platform_raised, platform_goal, platform_currency, platform_donations,
+                                  platform_checked_at IS NOT NULL, sync_detail
+                           FROM campaign_fundraisers ORDER BY id""")
+            rows = {r[0]: r[1:] for r in cur.fetchall()}
+        conn.close()
+        return rows
 
     def connect(self, **kw):
         return psycopg2.connect(make_dsn(DSN, dbname=self.dbname, **kw))
@@ -295,6 +315,31 @@ class SyncAgainstPostgresTest(PostgresTestCase):
             code, _, err = self.run_new()
         self.assertEqual(code, 5)
         self.assertIn('database connection failed', err)
+
+
+class SyncDetailsTest(PostgresTestCase):
+    """deploy/sync-details.sql: the platform's figures and the reason are kept."""
+
+    def test_keeps_held_figures_and_reason(self):
+        self.add_details()
+        self.add_details()   # safe to run twice
+        code, out, err = self.run_new('--apply')
+        self.assertEqual(code, 0, err)
+        d, t = self.details(), self.table()
+        # The held row keeps its stored figures but records what the page showed.
+        self.assertEqual(t[5][2:4], (Decimal('20000.00'), 'suspicious_drop'))
+        self.assertEqual(d[5][:5], (Decimal('12345.5'), Decimal('50000'), 'USD', 321, True))
+        self.assertTrue(d[5][5].startswith('stored 20,000 USD, platform shows 12,345.50 USD (-38%)'), d[5][5])
+        self.assertEqual(d[1][:5], (Decimal('12345.5'), Decimal('50000'), 'USD', 321, True))
+        self.assertIsNone(d[1][5])
+        self.assertEqual(d[7][5], 'no __NEXT_DATA__ block')     # parse_error says why
+        self.assertIsNone(d[6][0])                              # not found: nothing seen
+        self.assertFalse(d[11][4])                              # untouched rows stay empty
+
+    def test_without_the_script_nothing_changes(self):
+        code, out, err = self.run_new('--apply')
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.table()[5][3], 'suspicious_drop')
 
 
 class ParityWithOriginalTest(PostgresTestCase):

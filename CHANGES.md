@@ -325,3 +325,24 @@ a percentage (some Chuffed pages). The rules for what is held are unchanged;
 the held figures are still not written.
 
 **Drop it:** Revert this commit.
+
+## 28. Keep what the platform showed, and why a row was not updated (2026-10-20)
+
+**What:** New columns on `campaign_fundraisers`, added by
+`deploy/sync-details.sql`: `platform_raised`, `platform_goal`,
+`platform_currency`, `platform_donations`, `platform_checked_at` (what the
+platform last showed, written even when the figure was held) and
+`sync_detail` (why the last check did not update the row: the held line from
+item 27, or a parse error's reason; empty after a normal update). The website
+uses them to show a held figure next to the stored one and to accept it
+(website PR), and `bfep sync problems` / `bfep sync accept` use them too.
+
+The sync checks at start that the columns exist and that its user may update
+them. Until the script is run it works exactly as before.
+
+**Do once:** run `deploy/sync-details.sql` as `data` (it also grants the
+columns to `bfep_sync` and `bfep_app`, and `campaigns.line_number` to
+`bfep_sync`). Safe to run twice.
+
+**Drop it:** Revert this commit; the columns can stay (nothing else reads
+them), or `ALTER TABLE campaign_fundraisers DROP COLUMN ...` each one.

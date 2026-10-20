@@ -394,8 +394,10 @@ class FakeStore:
     def record_ok(self, rid, fig):
         self.written.append((rid, 'ok', fig.raised))
 
-    def record_problem(self, rid, status, failures):
+    def record_problem(self, rid, status, failures, fig=None, detail=''):
         self.written.append((rid, status, failures))
+        self.details = getattr(self, 'details', {})
+        self.details[rid] = (fig, detail)
 
 
 class RunTest(unittest.TestCase):
@@ -432,6 +434,9 @@ class RunTest(unittest.TestCase):
         self.assertEqual(lines[1], '4: suspicious_drop, stored 16,000 USD, platform shows 12,345.50 USD (-23%); '
                                    '32% -> 25% of the 50,000 goal; 321 donations; not saved')
         self.assertEqual(store.written, [(4, 'suspicious_drop', 0)])
+        fig, detail = store.details[4]
+        self.assertEqual(fig.raised, Decimal('12345.5'))
+        self.assertTrue(detail.startswith('stored 16,000 USD, platform shows 12,345.50 USD'))
         self.assertEqual(result.changed, 0)
 
     def test_block_stops_the_provider(self):
