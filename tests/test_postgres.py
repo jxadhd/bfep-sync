@@ -349,6 +349,23 @@ class SyncDetailsTest(PostgresTestCase):
         self.assertIn('  bfep sync accept 5 ', out)
         self.assertLess(out.index('== suspicious_drop'), out.index('== parse_error'))
 
+    def test_accept_saves_the_held_figure(self):
+        self.add_details()
+        self.run_new('--apply')
+        code, out, err = self.run_new('--accept', '5')
+        self.assertEqual(code, 0, err)
+        self.assertEqual(out.strip(), '5: saved, raised 20000.00 -> 12345.5')
+        self.assertEqual(self.table()[5][2:5], (Decimal('12345.50'), 'ok', 0))
+        self.assertIsNone(self.details()[5][5])
+        _, out, _ = self.run_new('--problems')
+        self.assertNotIn('fundraiser 5:', out)
+
+    def test_accept_works_without_the_script_and_for_manual_rows(self):
+        code, out, err = self.run_new('--accept', '12', '13')
+        self.assertEqual(code, 1, err)
+        self.assertIn('12: saved', out)                                  # auto_sync off
+        self.assertIn('13: not saved, no active fundraiser', out)        # campaign deleted
+
     def test_problems_needs_the_script(self):
         code, out, _ = self.run_new('--problems')
         self.assertEqual(code, 4)

@@ -27,7 +27,7 @@ from bfep_sync.providers.justgiving import JustGiving, parse_justgiving  # noqa:
 from bfep_sync.providers.paypal import PayPal, parse_paypal  # noqa: E402
 from bfep_sync.providers.spotfund import Spotfund, parse_spotfund  # noqa: E402
 from bfep_sync.providers.steunactie import Steunactie, parse_steunactie  # noqa: E402
-from bfep_sync.runner import Row, check, describe_held, run, shown_status  # noqa: E402
+from bfep_sync.runner import Row, accept, check, describe_held, run, shown_status  # noqa: E402
 
 FIXTURES = ROOT / 'tests' / 'fixtures'
 
@@ -366,6 +366,32 @@ class DescribeHeldTest(unittest.TestCase):
                          'stored 5,000 USD, platform shows 10 USD (-100%); not saved')
 
 
+class AcceptTest(unittest.TestCase):
+
+    def accept(self, store, ids, *responses):
+        lines = []
+        code = accept(store, [pages_only()], ids, fetch=FakeFetch(*responses),
+                      out=lines.append, sleep=lambda s: None)
+        return code, lines
+
+    def test_saves_a_drop(self):
+        store = FakeStore([row(id=4, raised=Decimal('16000'))])
+        code, lines = self.accept(store, [4], fixture('gofundme_ok.html'))
+        self.assertEqual((code, store.written), (0, [(4, 'ok', Decimal('12345.5'))]))
+        self.assertEqual(lines, ['4: saved, raised 16000 -> 12345.5'])
+
+    def test_says_why_it_could_not(self):
+        store = FakeStore([row(id=4), row(id=5, url='https://example.org/x'), row(id=6)])
+        code, lines = self.accept(store, [4, 5, 6, 9], http_error(404), fixture('gofundme_no_next_data.html'))
+        self.assertEqual(code, 1)
+        self.assertEqual(store.written, [])
+        self.assertEqual(lines, [
+            '4: not saved, not_found; see bfep sync problems',
+            '5: not saved, the sync does not read this link: https://example.org/x',
+            '6: not saved, parse_error (no __NEXT_DATA__ block); see bfep sync problems',
+            '9: not saved, no active fundraiser with this ID'])
+
+
 class RetryTest(unittest.TestCase):
 
     def test_retries_transient_errors_only(self):
@@ -390,6 +416,9 @@ class FakeStore:
     def select(self, providers, limit):
         rows = [r for r in self.rows if any(p.matches(r.url) or p.url_pattern for p in providers)]
         return rows[:limit] if limit else rows
+
+    def select_ids(self, ids):
+        return [r for r in self.rows if r.id in ids]
 
     def record_ok(self, rid, fig):
         self.written.append((rid, 'ok', fig.raised))

@@ -76,6 +76,7 @@ a script in `commands/`:
 | `bfep sync [--apply] [--limit N]` | Runs the sync now with the settings in `/etc/bfep-sync.env`. A dry run unless `--apply`. |
 | `bfep sync status` | The deployed version, the timer and the last run. |
 | `bfep sync problems` | Every fundraiser the sync could not update, grouped by status, with what the status means, what to do, the page and the admin link to fix it. Held figures show what the platform showed. Needs `deploy/sync-details.sql`. |
+| `bfep sync accept ID [ID...]` | Checks those fundraisers again and saves what their platforms show now, even a drop of more than 20% (for held figures someone has checked on the page). Says why when it can't. Then clears the site's cached campaign pages. |
 | `bfep sync log [N]` | The last N lines (default 50) of the sync's log from the last 24 hours. Add `--since 3d` (or `12h`, `2026-10-01`) for a longer window, or `--all` for the whole log, which can take a while to search. |
 | `bfep sync test` | Runs the test suite on the live copy. |
 | `bfep sync deploy [ref]` | Deploys a branch or tag of this repo to `/opt/bfep-sync`, tests first. `DRY_RUN=1` shows what would change. |
@@ -142,6 +143,9 @@ lives in `runner.check()`, so a new provider gets them automatically.
 All of these are covered by tests in `CheckRulesTest`:
 
 - A raised figure that falls by more than 20% is held as `suspicious_drop`.
+  The run prints what the platform showed; `bfep sync problems` lists every
+  held row, and `bfep sync accept ID` (or "Use these figures" on the
+  website's fundraiser form) takes a figure once someone has checked it.
 - When the page states a currency that differs from the stored one, or none is
   stored, the page's currency, goal and amount are adopted, and the run prints
   `CURRENCY old -> new` for the change. The 20% drop check is skipped for that

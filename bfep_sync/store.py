@@ -88,6 +88,14 @@ class PostgresStore:
             params += (fig.raised, fig.goal, fig.currency, fig.donations)
         return sql, params
 
+    def select_ids(self, ids: list[int]) -> list[Row]:
+        """The named active fundraisers, whether or not they sync nightly."""
+        sql = SELECT.replace('AND cf.auto_sync', '').replace('cf.url ~* %s', 'cf.id = ANY(%s)')
+        self.cur.execute(sql, (list(ids),))
+        rows = [Row(*r) for r in self.cur.fetchall()]
+        self.conn.rollback()
+        return rows
+
     def record_ok(self, rid: int, fig: Figures) -> None:
         extra, params = self._detail_sql(fig, '')
         self.cur.execute(

@@ -115,7 +115,9 @@ def fetch_with_retry(provider: Provider, url: str, fetch: Fetcher, retries: int,
 
 
 def check(provider: Provider, row: Row, fetch: Fetcher, retries: int = 0,
-          sleep: Callable[[float], None] | None = None) -> Outcome:
+          sleep: Callable[[float], None] | None = None, accept: bool = False) -> Outcome:
+    """`accept` takes whatever the platform shows: no drop or currency hold
+    (bfep sync accept, after someone has checked the page)."""
     sleep = sleep or time.sleep
     u = provider.normalize(row.url)
     if u is None:
@@ -141,6 +143,8 @@ def check(provider: Provider, row: Row, fetch: Fetcher, retries: int = 0,
         if code not in DOLLAR_CODES:
             return Outcome('currency_unknown', None, False)
         fig = replace(fig, currency=code)
+    if accept:
+        return Outcome('ok', fig, False)
     if os.environ.get('SYNC_HOLD_CURRENCY') == '1':
         if not code:
             if raised:
@@ -292,3 +296,42 @@ def run(store, providers: list[Provider], *, apply: bool, limit: int = 0, after:
     if apply and result.changed and after:
         subprocess.run(shlex.split(after), check=False)
     return result
+
+
+def accept(store, providers: list[Provider], ids: list[int], *, after: str = '',
+           fetch: Fetcher | None = None, out: Callable[[str], None] = print,
+           sleep: Callable[[float], None] | None = None) -> int:
+    """Checks the named fundraisers again and saves what their platforms show
+    now, even when it is a big drop. For held figures someone has checked.
+
+    Returns 0 when every one was saved, 1 otherwise.
+    """
+    fetch, sleep = fetch or http_fetch, sleep or time.sleep
+    active = [p for p in providers if p.configured()]
+    rows = {r.id: r for r in store.select_ids(ids)}
+    saved = 0
+    for rid in ids:
+        row = rows.get(rid)
+        if row is None:
+            out(f'{rid}: not saved, no active fundraiser with this ID')
+            continue
+        provider = provider_for(row.url, active)
+        if provider is None:
+            out(f'{rid}: not saved, the sync does not read this link: {row.url}')
+            continue
+        try:
+            outcome = check(provider, row, fetch, 1, sleep, accept=True)
+        except Blocked as e:
+            out(f'{rid}: not saved, {provider.name} refused the request (HTTP {e}); try again later')
+            continue
+        if outcome.status != 'ok':
+            note = f' ({outcome.detail})' if outcome.detail else ''
+            out(f'{rid}: not saved, {outcome.status}{note}; see bfep sync problems')
+            continue
+        note, _ = describe_ok(row, outcome.figures)
+        store.record_ok(rid, outcome.figures)
+        saved += 1
+        out(f'{rid}: saved, {note}')
+    if saved and after:
+        subprocess.run(shlex.split(after), check=False)
+    return 0 if saved == len(ids) else 1

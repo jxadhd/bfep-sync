@@ -367,3 +367,17 @@ also ends with the IDs and admin links of the rows that need a look
 them without scrolling. `SITE_URL` changes the site in the links.
 
 **Drop it:** Revert this commit.
+
+## 30. `bfep sync accept` (2026-10-20)
+
+**What:** A held figure stayed held every night until someone typed the new
+amount in by hand. `bfep sync accept 1234 5678` checks those fundraisers
+again now and saves what their platforms show, even a drop of more than 20%
+or a new currency, then clears the site's cached campaign pages (the same
+`drush cache:tag bfep:campaigns` as the timer; `SYNC_AFTER=` skips it). It
+takes the run lock, works on any active fundraiser (also ones whose nightly
+sync is off) and says per ID why it could not save (page not found,
+unreadable, a link the sync doesn't read, no such fundraiser). Exit 0 when
+every ID was saved, 1 otherwise. No new grants needed.
+
+**Drop it:** Revert this commit.
