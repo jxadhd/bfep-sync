@@ -189,7 +189,9 @@ def run(store, providers: list[Provider], *, apply: bool, limit: int = 0, after:
         urls = [u for row in rows if provider_for(row.url, active) is p and (u := p.normalize(row.url))]
         if urls:
             try:
-                p.prefetch(urls, fetch)
+                note = p.prefetch(urls, fetch)
+                if note:
+                    out(f'{p.name}: {note}')
             except Exception as e:
                 out(f'{p.name}: batch fetch failed ({type(e).__name__}: {e}), fetching one at a time')
 

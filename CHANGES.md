@@ -280,3 +280,31 @@ mistakes exit 2. `bfep update rollback` with no timestamp lists the latest
 backups.
 
 **Drop it:** Revert this commit.
+
+## 26. GoFundMe figures from GoFundMe's API (2026-10-20, on by default)
+
+**What:** GoFundMe has no API for other people's fundraisers (its official
+API is GoFundMe Pro's, for a nonprofit's own campaigns), but its own pages
+load every fundraiser from a public GraphQL API at graphql.gofundme.com with
+no key, and the figures the scraper read were a copy of that answer. Before
+the run the GoFundMe provider now asks that API for 20 fundraisers per
+request (`fundraiser(slug:) { currentAmount goalAmount donationCount }`) and
+serves rows from the answers. gofund.me short links are first resolved to
+their slug with a HEAD request (no page downloaded). Anything the API doesn't
+answer is read from its page exactly as before: a deleted fundraiser (so its
+404 still counts), a link without a slug, an odd answer, or the whole API
+when it errors or answers two batches in a row with nothing. A refused API
+never blocks the pages. The run prints one line such as
+`gofundme: API answered 1180 of 1254 fundraisers, the rest are read from their pages`.
+The same safeguards apply to both sources. About 1,250 rows used to take
+about 2.5 hours at 7 s a page; with the API it is about 20 minutes of
+short-link lookups plus about 2 minutes of API requests.
+
+Also: `Provider.prefetch()` may return a note for the run output.
+
+**Check it:** `bfep sync --limit 40` (dry run) and look for the
+`gofundme: API answered ...` line. If it says the API stopped, the run read
+pages as before; paste the line in the thread.
+
+**Drop it:** `GOFUNDME_API=0` in `/etc/bfep-sync.env` turns it off without a
+deploy; or revert this commit.

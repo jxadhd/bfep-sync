@@ -151,7 +151,7 @@ class PostgresTestCase(unittest.TestCase):
         # The sync connects with PG* variables, as on the server, as bfep_sync.
         params = parse_dsn(DSN)
         env = {'PGDATABASE': self.dbname, 'PGUSER': 'bfep_sync', 'PGPASSWORD': 'bfep_sync_test',
-               'SYNC_PROVIDERS': 'gofundme'}
+               'SYNC_PROVIDERS': 'gofundme', 'GOFUNDME_API': '0'}   # pages, as fake_urlopen serves
         if 'host' in params:
             env['PGHOST'] = params['host']
         if 'port' in params:

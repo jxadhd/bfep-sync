@@ -56,6 +56,11 @@ class FakeFetch:
         return item
 
 
+def pages_only() -> GoFundMe:
+    """GoFundMe reading pages only, as before the API, with no real waits."""
+    return GoFundMe(use_api=False, sleep=lambda s: None)
+
+
 def row(**kw) -> Row:
     base = dict(id=1, url='https://www.gofundme.com/f/help', currency_code='USD',
                 goal=Decimal('50000'), raised=Decimal('12000'), consecutive_failures=0)
@@ -104,11 +109,163 @@ class GoFundMeNormalizeTest(unittest.TestCase):
                 self.assertIsNone(p.normalize(bad))
 
 
+def gfm_node(raised=12345.5, goal=50000, currency='USD', count=321):
+    """A Fundraiser as graphql.gofundme.com answers it (same shape as the page's Apollo state)."""
+    return {'currentAmount': {'amount': raised, 'currencyCode': currency},
+            'goalAmount': {'amount': goal, 'currencyCode': currency} if goal is not None else None,
+            'donationCount': count}
+
+
+def gfm_batch(*nodes, errors=None):
+    body = {'data': {f'f{i}': n for i, n in enumerate(nodes)}}
+    if errors:
+        body['errors'] = [{'message': errors}]
+    return json.dumps(body)
+
+
+class GoFundMeApiTest(unittest.TestCase):
+
+    def provider(self, redirects=None, waits=None):
+        now = [0.0]
+
+        def sleep(s):
+            if waits is not None:
+                waits.append(s)
+            now[0] += s
+
+        def resolve(u):
+            r = (redirects or {})[u]
+            if isinstance(r, BaseException):
+                raise r
+            return r
+        return GoFundMe(use_api=True, resolve=resolve, clock=lambda: now[0], sleep=sleep, jitter=lambda: 0)
+
+    def test_slugs_from_links(self):
+        from bfep_sync.providers.gofundme import _slug
+        self.assertEqual(_slug('https://www.gofundme.com/f/help-gaza-family?attribution_id=x'), 'help-gaza-family')
+        self.assertEqual(_slug('https://gofundme.com/f/help/donate'), 'help')
+        self.assertEqual(_slug('https://www.gofundme.com/manage/help'), 'help')
+        self.assertEqual(_slug('https://www.gofundme.com/old-style-slug'), 'old-style-slug')
+        for bad in ('https://gofund.me/abc123', 'https://www.gofundme.com/', 'https://www.gofundme.com/c/blog/x',
+                    'https://www.gofundme.com/f/"x"', 'https://evil.com/f/help', None):
+            with self.subTest(bad=bad):
+                self.assertIsNone(_slug(bad))
+
+    def test_prefetch_asks_for_many_fundraisers_in_one_request(self):
+        p = self.provider()
+        urls = ['https://www.gofundme.com/f/one', 'https://gofundme.com/f/two/donate', 'https://www.gofundme.com/f/one']
+        fetch = FakeFetch(gfm_batch(gfm_node(), gfm_node(raised=10, goal=None, currency='EUR', count=None)))
+        note = p.prefetch(urls, fetch)
+        self.assertEqual(fetch.urls, ['https://graphql.gofundme.com/graphql'])
+        query = json.loads(fetch.data)['query']
+        self.assertIn('f0: fundraiser(slug: "one")', query)
+        self.assertIn('f1: fundraiser(slug: "two")', query)
+        self.assertNotIn('f2', query)
+        self.assertEqual(p.fetch_figures(urls[0], fetch), Figures(Decimal('12345.5'), Decimal('50000'), 'USD', 321))
+        self.assertEqual(p.fetch_figures(urls[1], fetch), Figures(Decimal('10'), None, 'EUR', None))
+        self.assertEqual(p.fetch_figures(urls[2], fetch).raised, Decimal('12345.5'))
+        self.assertEqual(len(fetch.urls), 1)
+        self.assertEqual(note, 'API answered 2 of 2 fundraisers, the rest are read from their pages')
+
+    def test_api_and_page_give_the_same_figures(self):
+        p = self.provider()
+        url = 'https://www.gofundme.com/f/help'
+        p.prefetch([url], FakeFetch(gfm_batch(gfm_node())))
+        self.assertEqual(p.fetch_figures(url, FakeFetch()), parse_gofundme(fixture('gofundme_ok.html')))
+
+    def test_unanswered_and_odd_answers_are_read_from_the_page(self):
+        p = self.provider()
+        urls = ['https://www.gofundme.com/f/gone', 'https://www.gofundme.com/f/odd', 'https://www.gofundme.com/f/fine']
+        p.prefetch(urls, FakeFetch(gfm_batch(None, gfm_node(currency='usd'), gfm_node(), errors='not found')))
+        fetch = FakeFetch(http_error(404), fixture('gofundme_ok.html'))
+        o = check(p, row(url=urls[0]), fetch)
+        self.assertEqual((o.status, o.failed), ('not_found', True))
+        self.assertEqual(p.fetch_figures(urls[1], fetch).currency, 'USD')
+        self.assertEqual(fetch.urls, urls[:2])
+
+    def test_short_links_are_resolved_to_their_slug(self):
+        p = self.provider(redirects={
+            'https://gofund.me/abc': 'https://www.gofundme.com/f/help-family?attribution_id=sl:1',
+            'https://gofund.me/dead': http_error(404),
+            'https://gofund.me/odd': None})
+        urls = ['https://gofund.me/abc', 'https://gofund.me/dead', 'https://gofund.me/odd']
+        fetch = FakeFetch(gfm_batch(gfm_node(raised=5)))
+        p.prefetch(urls, fetch)
+        self.assertIn('f0: fundraiser(slug: "help-family")', json.loads(fetch.data)['query'])
+        self.assertNotIn('f1', json.loads(fetch.data)['query'])
+        self.assertEqual(p.fetch_figures(urls[0], fetch).raised, Decimal('5'))
+        page = FakeFetch(fixture('gofundme_ok.html'))
+        self.assertEqual(p.fetch_figures(urls[2], page).raised, Decimal('12345.5'))
+        self.assertEqual(page.urls, ['https://gofund.me/odd'])
+
+    def test_refused_redirect_lookups_stop(self):
+        calls = []
+        p = self.provider()
+        p.resolve = lambda u: (calls.append(u), (_ for _ in ()).throw(http_error(429)))[1]
+        p.prefetch(['https://gofund.me/a', 'https://gofund.me/b'], FakeFetch())
+        self.assertEqual(calls, ['https://gofund.me/a'])
+
+    def test_api_that_answers_nothing_falls_back_to_pages(self):
+        p = self.provider()
+        urls = [f'https://www.gofundme.com/f/x{n}' for n in range(60)]
+        fetch = FakeFetch('{"errors":[{"message":"Cannot query field"}]}', '<html>blocked</html>')
+        note = p.prefetch(urls, fetch)
+        self.assertEqual(len(fetch.urls), 2)   # gave up after two empty batches
+        self.assertIn('API answered 0 of 60', note)
+        self.assertIn('API stopped (ParseError', note)
+        page = FakeFetch(fixture('gofundme_ok.html'))
+        self.assertEqual(p.fetch_figures(urls[0], page).raised, Decimal('12345.5'))
+
+    def test_one_empty_batch_is_not_the_end(self):
+        p = self.provider()
+        urls = [f'https://www.gofundme.com/f/x{n}' for n in range(30)]
+        p.prefetch(urls, FakeFetch(gfm_batch(*[None] * 20), gfm_batch(*[gfm_node()] * 10)))
+        self.assertEqual(p.fetch_figures(urls[29], FakeFetch()).raised, Decimal('12345.5'))
+
+    def test_api_http_error_does_not_block_pages(self):
+        p = self.provider()
+        url = 'https://www.gofundme.com/f/help'
+        note = p.prefetch([url], FakeFetch(http_error(403)))
+        self.assertIn('API stopped (HTTPError', note)
+        self.assertEqual(check(p, row(url=url), FakeFetch(fixture('gofundme_ok.html'))).status, 'ok')
+
+    def test_paces_api_requests_and_pages(self):
+        waits = []
+        p = self.provider(waits=waits)
+        urls = [f'https://www.gofundme.com/f/x{n}' for n in range(25)]
+        p.prefetch(urls, FakeFetch(gfm_batch(*[gfm_node()] * 20), gfm_batch(*[None] * 5)))
+        fetch = FakeFetch(fixture('gofundme_ok.html'), fixture('gofundme_ok.html'))
+        p.fetch_figures(urls[0], fetch)    # answered: no wait
+        p.fetch_figures(urls[20], fetch)
+        p.fetch_figures(urls[21], fetch)
+        self.assertEqual(waits, [2.0, 6.0, 6.0])
+
+    def test_api_off_reads_pages(self):
+        p = GoFundMe(use_api=False, sleep=lambda s: None)
+        fetch = FakeFetch(fixture('gofundme_ok.html'))
+        self.assertIsNone(p.prefetch(['https://gofund.me/abc'], fetch))
+        self.assertEqual(p.fetch_figures('https://gofund.me/abc', fetch).raised, Decimal('12345.5'))
+        self.assertEqual(fetch.urls, ['https://gofund.me/abc'])
+
+    def test_setting_turns_api_off(self):
+        for value, on in (('0', False), ('off', False), ('1', True), ('', True)):
+            with self.subTest(value=value), mock.patch.dict('os.environ', {'GOFUNDME_API': value}):
+                self.assertEqual(GoFundMe().use_api, on)
+
+    def test_run_prints_the_api_note(self):
+        lines = []
+        store = FakeStore([row(id=1), row(id=2, url='https://www.gofundme.com/f/other')])
+        run(store, [self.provider()], apply=False, fetch=FakeFetch(gfm_batch(gfm_node(), gfm_node())),
+            retries=0, out=lines.append, sleep=lambda s: None, jitter=lambda: 0)
+        self.assertEqual(lines[1], 'gofundme: API answered 2 of 2 fundraisers, the rest are read from their pages')
+        self.assertTrue(lines[2].startswith('1: ok'))
+
+
 class CheckRulesTest(unittest.TestCase):
     """The original sync.py decision rules, one case each."""
 
     def setUp(self):
-        self.p = GoFundMe()
+        self.p = pages_only()
         self.ok = fixture('gofundme_ok.html')  # USD 12345.5 raised, goal 50000
 
     def outcome(self, r, *responses):
@@ -185,7 +342,7 @@ class CheckRulesTest(unittest.TestCase):
 class RetryTest(unittest.TestCase):
 
     def test_retries_transient_errors_only(self):
-        p, ok = GoFundMe(), fixture('gofundme_ok.html')
+        p, ok = pages_only(), fixture('gofundme_ok.html')
         sleeps = []
         o = check(p, row(), FakeFetch(OSError('timeout'), ok), retries=1, sleep=sleeps.append)
         self.assertEqual(o.status, 'ok')
@@ -218,7 +375,7 @@ class RunTest(unittest.TestCase):
 
     def run_sync(self, store, responses, apply=True, providers=None):
         lines = []
-        result = run(store, providers or [GoFundMe()], apply=apply, fetch=FakeFetch(*responses),
+        result = run(store, providers or [pages_only()], apply=apply, fetch=FakeFetch(*responses),
                      retries=0, out=lines.append, sleep=lambda s: None, jitter=lambda: 0)
         return result, lines
 
@@ -251,7 +408,7 @@ class RunTest(unittest.TestCase):
 
     def test_unconfigured_provider_is_skipped(self):
         store = FakeStore([])
-        _, lines = self.run_sync(store, [], providers=[GoFundMe(), JustGiving(app_id='')])
+        _, lines = self.run_sync(store, [], providers=[pages_only(), JustGiving(app_id='')])
         self.assertIn('justgiving: not configured, skipped', lines)
 
 

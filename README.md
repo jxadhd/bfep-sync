@@ -57,6 +57,7 @@ New options and settings:
 | `--provider a,b` or `SYNC_PROVIDERS` | `gofundme` | Which providers run. An unknown name exits with code 4. |
 | `--retries N` | `1` | Retries for network errors and HTTP 5xx on each campaign. `0` restores the original behaviour. |
 | `JUSTGIVING_APP_ID` | unset | Turns on the JustGiving provider (see below). |
+| `GOFUNDME_API` | `1` | GoFundMe figures come from GoFundMe's public GraphQL API, 20 fundraisers per request, with the page as fallback. `0` reads every page, as before. |
 | `CHUFFED_TOKEN` | unset | The token Chuffed issued for its API (sent as `x-chuffed-token`). Needed by the Chuffed provider; keep it only in the env file. |
 
 Exit codes: `0` means ok. `2` means a platform blocked us with 403 or 429; the
@@ -117,7 +118,7 @@ for `bfep deploy` and `bfep update`, and the originals are copied to
 bfep_sync/
   providers/base.py       Provider interface, Figures, ParseError, Blocked, NotConfigured
   providers/chuffed.py    Chuffed via its GraphQL API (needs CHUFFED_TOKEN)
-  providers/gofundme.py   GoFundMe: original normalize() and parse_gofundme(), unchanged rules
+  providers/gofundme.py   GoFundMe: its public GraphQL API in batches, original page parser as fallback
   providers/gogetfunding.py GoGetFunding page text parser (off until listed)
   providers/justgiving.py JustGiving via its REST API (off until configured)
   providers/paypal.py     PayPal fundraiser (donate?campaign_id=) page data parser (off until listed)
@@ -154,8 +155,9 @@ All of these are covered by tests in `CheckRulesTest`:
   A parse error also counts as a failure.
 - 403 or 429 stops calling that platform for the rest of the run, with exit code 2.
 - The same UPDATE statements, the same columns and the same dry-run output lines.
-- About 6 seconds plus 0 to 2 seconds of jitter between GoFundMe requests, and no
-  sleep after an invalid URL.
+- About 6 seconds plus 0 to 2 seconds of jitter before each GoFundMe page, and no
+  sleep after an invalid URL. GoFundMe API requests (20 fundraisers each) and
+  short-link lookups are 2 seconds apart.
 
 ## Adding a provider
 
@@ -176,6 +178,7 @@ All of these are covered by tests in `CheckRulesTest`:
 | GoGetFunding | Page scrape of the visible sidebar text | Implemented, off by default, **fixtures are synthetic: dry-run before enabling** |
 | Spotfund | Page scrape of the amount-raised section, currency from the story data | Implemented, off by default, fixture saved from a live page |
 | PayPal fundraisers | Page data fields next to the campaign's productId; paypal.me and donate buttons have no totals and are left out | Implemented, off by default, **fixture is synthetic: dry-run before enabling** |
+| GoFundMe | GoFundMe's public GraphQL API (graphql.gofundme.com, the one its own pages use; no key), 20 fundraisers per request; gofund.me links resolved with a HEAD request; the page is read for anything the API doesn't answer | On by default (`GOFUNDME_API=0` turns the API off), **query unverified against the live API: dry-run first** |
 | JustGiving | Official REST API, needs a free app ID | Implemented, off by default, **unverified against the live API** |
 | Chuffed | Chuffed's private GraphQL API with the token they issued; 20 campaigns per request, paced under their 10 requests a minute | Implemented, off by default, response shape checked against the live API |
 | Steunactie | Page scrape of the visible "€ X van € Y opgehaald" text, in euros | Implemented, off by default, **markup is synthetic (built from the page text): dry-run before enabling** |
