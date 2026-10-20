@@ -111,12 +111,21 @@ class PostgresStore:
                        fig: Figures | None = None, detail: str = '') -> None:
         """`fig` is what the platform showed for a held row (never saved as the
         figures); `detail` says why the row was not updated."""
+        import psycopg2
         extra, params = self._detail_sql(fig, detail)
-        self.cur.execute(
-            """UPDATE campaign_fundraisers
-               SET last_checked_at = now(), sync_status = %s, consecutive_failures = %s""" + extra + """
-               WHERE id = %s""",
-            (status, failures, *params, rid))
+        sql = """UPDATE campaign_fundraisers
+                 SET last_checked_at = now(), sync_status = %s, consecutive_failures = %s""" + extra + """
+                 WHERE id = %s"""
+        try:
+            self.cur.execute(sql, (status, failures, *params, rid))
+        except psycopg2.errors.InvalidTextRepresentation:
+            # sync_status is an enum without this status (hidden_totals is
+            # added by deploy/sync-details.sql): record no status rather than
+            # stop the run.
+            self.conn.rollback()
+            print(f'{rid}: the database has no sync status {status!r} yet '
+                  '(run deploy/sync-details.sql again), so none was recorded')
+            self.cur.execute(sql, (None, failures, *params, rid))
         self.conn.commit()
         if status == 'not_found':
             self.turn_off(rid)

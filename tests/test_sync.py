@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / 'original'))
 
 from bfep_sync import providers as registry  # noqa: E402
-from bfep_sync.providers import Blocked, Figures, ParseError  # noqa: E402
+from bfep_sync.providers import Blocked, Figures, ParseError, TotalsHidden  # noqa: E402
 from bfep_sync.providers.chuffed import MIN_INTERVAL, Chuffed, parse_chuffed  # noqa: E402
 from bfep_sync.providers.gofundme import GoFundMe, parse_gofundme  # noqa: E402
 from bfep_sync.providers.gogetfunding import GoGetFunding, parse_gogetfunding  # noqa: E402
@@ -733,6 +733,19 @@ class ChuffedTest(unittest.TestCase):
     def test_reads_figures_in_cents(self):
         # Response shape from fundraiser 120680, fetched from the server on 2026-10-15.
         self.assertEqual(parse_chuffed(chuffed_body()), Figures(Decimal('30880.65'), Decimal('35000'), 'USD', 569))
+
+    def test_hidden_totals(self):
+        # What Chuffed sends for a campaign that hides its figures (fundraiser 826, 2026-10-20).
+        body = chuffed_body(raised='0', goal='0', currency='EUR', count=331)
+        with self.assertRaises(TotalsHidden):
+            parse_chuffed(body)
+        o = check(Chuffed(token='t', sleep=lambda s: None),
+                  row(url='https://chuffed.org/project/150182-help', currency_code='EUR', raised=Decimal('5000')),
+                  FakeFetch(body))
+        self.assertEqual((o.status, o.failed, o.figures), ('hidden_totals', False, None))
+        self.assertEqual(o.detail, "Chuffed hides this campaign's totals; 331 donations")
+        # A new campaign with nothing raised yet is not hidden.
+        self.assertEqual(parse_chuffed(chuffed_body(raised='0', goal='0', count=0)).raised, Decimal('0'))
 
     def test_zero_decimal_currency_and_no_goal(self):
         self.assertEqual(parse_chuffed(chuffed_body(raised='5000', goal='0', currency='JPY')),

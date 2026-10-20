@@ -10,6 +10,8 @@ stated currency is now adopted (see below):
   NOT_FOUND_AFTER consecutive failures, when the store also turns auto_sync off)
 * other HTTP status -> 'http_<code>' (not a failure)
 * unparseable page -> 'parse_error' (a failure)
+* the platform hides the figures -> 'hidden_totals' (not a failure; the
+  stored figures stay as staff entered them)
 * other exception -> 'error' (not a failure)
 * page shows only a bare "$" -> the stored currency is kept when it is a
   dollar currency, otherwise 'currency_unknown' (GoGetFunding only)
@@ -42,7 +44,7 @@ from decimal import Decimal
 from typing import Callable, Iterable
 
 from . import repair
-from .providers import Blocked, Fetcher, Figures, NotConfigured, ParseError, Provider
+from .providers import Blocked, Fetcher, Figures, NotConfigured, ParseError, Provider, TotalsHidden
 
 UA = 'TBEPSync/1.0 (+https://bfep.org)'
 NOT_FOUND_AFTER = 3            # consecutive failures before status 'not_found'
@@ -105,7 +107,7 @@ def fetch_with_retry(provider: Provider, url: str, fetch: Fetcher, retries: int,
         except urllib.error.HTTPError as e:
             if e.code not in TRANSIENT_HTTP or attempt >= retries:
                 raise
-        except (ParseError, NotConfigured):
+        except (ParseError, NotConfigured, TotalsHidden):
             raise
         except Exception:
             if attempt >= retries:
@@ -134,6 +136,8 @@ def check(provider: Provider, row: Row, fetch: Fetcher, retries: int = 0,
         return Outcome('parse_error', None, True, str(e))
     except NotConfigured:
         return Outcome('not_configured', None, False)
+    except TotalsHidden as e:
+        return Outcome('hidden_totals', None, False, str(e))
     except Exception as e:
         return Outcome('error', None, False, f'{type(e).__name__}: {e}')
 
