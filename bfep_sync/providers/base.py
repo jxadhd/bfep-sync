@@ -73,12 +73,13 @@ class Provider(abc.ABC):
         urllib.error.HTTPError propagate so the runner can classify it.
         """
 
-    def prefetch(self, urls: list[str], fetch: Fetcher) -> None:
+    def prefetch(self, urls: list[str], fetch: Fetcher) -> str | None:
         """Optionally fetches many already-normalised URLs before the run.
 
         A provider whose platform can answer for many campaigns in one
         request keeps the answers and serves fetch_figures from them. The
-        default does nothing. Errors propagate; the runner reports them and
+        default does nothing. A returned string is printed as a note in the
+        run's output. Errors propagate; the runner reports them and
         fetch_figures then fetches one at a time.
         """
 
