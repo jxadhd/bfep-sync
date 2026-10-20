@@ -56,6 +56,8 @@ class Provider(abc.ABC):
     url_pattern: str = ''
     #: Seconds between requests to this platform, plus 0-2 s of jitter.
     delay: float = 6.0
+    #: Set by the runner to its output, for progress notes during prefetch().
+    log: Callable[[str], None] | None = None
 
     def configured(self) -> bool:
         """False when required settings are missing; the runner skips it."""

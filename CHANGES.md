@@ -308,3 +308,14 @@ pages as before; paste the line in the thread.
 
 **Drop it:** `GOFUNDME_API=0` in `/etc/bfep-sync.env` turns it off without a
 deploy; or revert this commit.
+
+## 27. Progress lines while GoFundMe prepares (2026-10-20)
+
+**What:** Before the first row, the GoFundMe provider looks up every gofund.me
+short link (2 s each, about 20 minutes for ~600) and then asks the API, which
+printed nothing and looked stuck. It now prints `looking up N gofund.me short
+links (about M min)`, a line every 100 links, and `asking the API about N
+fundraisers`. Every output line is also flushed at once, so it shows up live
+through a pipe or `tee` too.
+
+**Drop it:** Revert this commit.
